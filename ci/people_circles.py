@@ -1,14 +1,13 @@
 """Exercise a People circle's whole-database reads and scoped writes in DEV."""
 
 from contextlib import closing
-import hashlib
 import json
 import os
 import sys
 import uuid
 
 from node import Connection
-from people_app import SETUP, install, observe_access, pick, read_records, sdk, people, write_owned
+from people_app import SETUP, install, observe_access, owned_item, pick, read_records, sdk, people, write_owned
 from people_declarations import configure_bindings, external_changes, independent_update, revoke_roster
 from people_log_views import inbox, pending_positions, published_views, scope_for
 from support import OperationError, decode_json, require, retry, run_operation, summary
@@ -271,19 +270,37 @@ def replace_comment(update, row, text):
     }
 
 
+def member_author(row, node_key, author_field, code):
+    require(row.get("created_by") == node_key and row.get("updated_by") == node_key and row["fields"]["author_id"] == author_field, code)
+
+
+def refuse_created_by(node, database, definition):
+    update = standard_comment(database, definition, "forged-author", "Refused", "spoofed-author")
+    inside, named = owned_item(database, update), owned_item(database, update)
+    inside["record"] = {**inside["record"], "created_by": "forged"}
+    named["created_by"] = "forged"
+    for item in (inside, named):
+        try:
+            node.call("/v1/write", {"mutations": [item]})
+        except OperationError as error:
+            require((error.socket_refusal or {}).get("status") == 400, "created_by_write_refused")
+        else:
+            require(False, "created_by_write_refused")
+
+
 def exercise_comment_ownership(publisher, recipient, database, definition, scope, reader):
-    author = hashlib.sha256(reader.encode()).hexdigest()
-    owner_comment = standard_comment(database, definition, "publisher", "Publisher wrote this", author)
+    # reader is Ana's node key: recipient_public_key from share contact.
+    owner_comment = standard_comment(database, definition, "publisher", "Publisher wrote this", reader)
     mine = standard_comment(database, definition, "receiver", "Ana wrote this", "spoofed-author")
-    # A matching author_id does not make Ana the owner. POST /v1/write has no metadata field,
-    # so the publisher's own record cannot carry a share_author either.
+    refuse_created_by(publisher, database, definition)
     write_owned(publisher, database, owner_comment)
     queue_and_restart(publisher, recipient, database, scope, 1, [mine])
     expected = {"publisher": "Publisher wrote this", "receiver": "Ana wrote this"}
     for node in (publisher, recipient):
         rows = retry("standard_comments_visible", lambda: standard_rows(node, database),
                      lambda rows: texts(rows) == expected)
-        require(rows["receiver"]["fields"]["author_id"] == author, "standard_verified_author")
+        member_author(rows["receiver"], reader, "spoofed-author", "standard_verified_author")
+        require(rows["publisher"].get("created_by") not in (None, reader), "standard_author_field_is_not_creator")
 
     current = standard_rows(publisher, database)["receiver"]
     write_owned(publisher, database, replace_comment(mine, current, "Moderated by publisher"))
@@ -299,8 +316,8 @@ def exercise_comment_ownership(publisher, recipient, database, definition, scope
     for node in (publisher, recipient):
         rows = retry("standard_comment_policy_applied", lambda: standard_rows(node, database),
                      lambda rows: texts(rows) == expected)
-        require(rows["receiver"]["fields"]["author_id"] == author, "standard_edited_author_unchanged")
-    report("Ana read both standard comments, created and edited her own, and kept her verified author ID. The publisher discarded her deletion and her edit to the publisher's comment.")
+        member_author(rows["receiver"], reader, "spoofed-editor", "standard_edited_author_unchanged")
+    report("Ana read both standard comments, created and edited her own. created_by stayed her node key. author_id did not identify her. The publisher discarded her deletion and her edit to the publisher's comment.")
 
 
 def exercise_upgrade(publisher, recipient, database, previous, scope):

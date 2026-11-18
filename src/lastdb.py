@@ -100,7 +100,16 @@ def record_row(record):
     revision = record.get("revision") if isinstance(record, dict) else None
     if not isinstance(fields, dict) or not isinstance(revision, str) or not revision:
         raise PeopleError("LastDB returned an invalid record")
-    return {"fields": fields, "revision": revision, "key": record.get("key"), "file": record.get("file")}
+    row = {"fields": fields, "revision": revision, "key": record.get("key"), "file": record.get("file")}
+    # The node sets these. A missing key stays omitted. Null is not a value.
+    for name in ("created_by", "updated_by"):
+        value = record.get(name)
+        if value is None:
+            continue
+        if not isinstance(value, str) or not value:
+            raise PeopleError("LastDB returned an invalid record")
+        row[name] = value
+    return row
 
 
 class LastDB:

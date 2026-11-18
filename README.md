@@ -77,7 +77,12 @@ social person add Ana --node-key "$ana_key" --contact ana.contact
 ## Whole-database sharing
 
 `social db create NAME` creates an empty share for your app's own schemas.
-Install the schemas through LastDB, then link a circle to the database.
+Place each schema on the owner socket with
+`POST /api/databases/{id}/apps/declare-schema`. The body has `app_id` and
+`schema`. `schema.name` is the canonical name, such as `social/Comment`, or a
+bare name that LastDB places under `app_id`. Put keys in `record_keys`. The
+route refuses a schema-level `key`. `retention`, when present, sits beside
+`schema`. Then link a circle to the database.
 
 A circle is one list of people with links to any number of databases. Each
 link carries a write scope: `read`, `all`, or a comma-separated list of
@@ -124,9 +129,9 @@ delete any comment.
 ### Named setups
 
 `social db create family --setup shared-albums` creates a whole-database share
-with the catalog definitions for Album, AlbumItem, Photo, and Comment already
-installed. Social records the new database ID before installing schemas and
-resumes setup by the same name. `social db verify ID --setup shared-albums`
+and places the catalog definitions for Album, AlbumItem, Photo, and Comment
+through `POST /api/databases/{id}/apps/declare-schema`. Social records the new
+database ID before placing those schemas, and resumes setup by the same name. `social db verify ID --setup shared-albums`
 checks an owned or received share by its stable ID and reports the current
 definition IDs. Add `--finish` to install missing schemas in an owned
 database. Additive schema updates can introduce more fields under the same
@@ -188,11 +193,20 @@ until LastDB confirms the result or definitively rejects it.
 ## How sharing works
 
 Every active receiver can send an encrypted change to the pending mutation
-log. A successful submission confirms that ExeMem queued it. Only the
-publisher's LastDB can read pending changes. It checks each one against the
-current schema permissions and record rules, discards refusals, and uploads
-accepted changes to the separate published log. Receivers follow that log and
-can read the resulting record after it syncs.
+log. The receiver posts one mutation document to
+`POST /api/databases/{id}/submissions` on its owner socket. The proposal id
+is the `Idempotency-Key` header: one non-nil UUID. The call answers 202
+with `ok`, `status: submitted`,
+`mutation_id`, and `submission_sequence`. It does not write a record on the
+receiver. An owned database or an unknown id answers 404. A share that is not
+a whole database answers 403. Only the publisher's LastDB can read pending
+changes. It checks each one against the current schema permissions and record
+rules, discards refusals, and uploads accepted changes to the separate
+published log. Receivers follow that log and can read the resulting record
+after it syncs, with `POST /v1/read` and the `database` field. An app that
+wants to show the sender's own change before the publisher accepts it reads
+`POST /api/databases/{id}/submissions/status` and shows that pending state.
+`POST /v1/write` to a received database is refused: the database is read only.
 [How sharing works](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/shared-database-mutation-logs.md)
 
 Social changes must preserve the two logs, the signed per-database roster and
@@ -202,11 +216,12 @@ schema grants, and the publisher's authority to approve each mutation.
 ## Choosing a database for an app
 
 `social pick-database --spec social --version 1 --intent read` lists the
-databases that match. Add `--database ID` to check one selection, and
-`--session` to issue a short-lived `databaseSession` for it. A client uses the
-selected ID with the normal LastDB data API and sends that value in
-`X-LastDB-Database-Session`. Keep the session out of logs. The node limits a
-session to the selected database and its approved operation.
+databases that match. Add `--database ID` to check one selection. The command
+returns that database's id, name, and spec. The app names that id in the
+`database` field of each `POST /v1/read` and `POST /v1/write` item. A write
+to a received database is refused. A change to a received whole-database
+share is the proposal described in How sharing works. LastDB limits an app
+by the schemas it declared, not by database.
 
 JavaScript and TypeScript apps use [`@lastdb/social-client`](client/README.md)
 in `client/`. Its `socialClient` runs these commands and checks their output.

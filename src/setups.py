@@ -1,4 +1,4 @@
-"""Set up databases from the versioned schemas shipped with Social."""
+"""Set up databases from the versioned schemas shipped with People."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ from pathlib import Path
 import re
 from uuid import uuid4
 
-from lastdb import LastDBError, SocialError
+from lastdb import LastDBError, PeopleError
 
 
 SHARED_ALBUMS = "shared-albums"
 VERSION = 1
 ALBUM_SCHEMAS = ("Album", "AlbumItem", "Photo", "Comment")
 CATALOG = Path(__file__).resolve().parents[1] / "setups" / "shared-albums-v1"
-SCHEMA = "social-graph/DatabaseSetup"
+SCHEMA = "people/DatabaseSetup"
 LABEL = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 DEFINITION_ID = re.compile(r"[0-9a-f]{64}\Z")
 CONTRACT_FIELDS = ("descriptive_name", "purpose_statement", "schema_type")
@@ -30,17 +30,17 @@ class Setups:
         setup = args["setupName"]
         version = args.get("requiredVersion", VERSION)
         if setup != SHARED_ALBUMS or type(version) is not int or version != VERSION:
-            raise SocialError("choose a supported Social database setup and version")
+            raise PeopleError("choose a supported People database setup and version")
         selectors = set(args) & {"databaseId", "localName"}
         if len(selectors) != 1:
-            raise SocialError("choose one database ID or one new local name")
+            raise PeopleError("choose one database ID or one new local name")
         selector = selectors.pop()
         value = args[selector]
         if not isinstance(value, str) or not LABEL.fullmatch(value):
-            raise SocialError("enter a valid database ID or local name")
+            raise PeopleError("enter a valid database ID or local name")
         finish = args.get("finishExisting") is True
         if finish and selector != "databaseId":
-            raise SocialError("select an owned database by ID to finish setup")
+            raise PeopleError("select an owned database by ID to finish setup")
         definitions = {}
         for name in ALBUM_SCHEMAS:
             request = json.loads((CATALOG / f"{name}.json").read_text())
@@ -49,7 +49,7 @@ class Setups:
             database = self.database(value)
             if finish:
                 if database["kind"] != "shareable" or not database.get("name"):
-                    raise SocialError("select a named database you own to finish setup")
+                    raise PeopleError("select a named database you own to finish setup")
                 database, verified = self.provision(database["name"], definitions, existing=database)
             else:
                 verified = self.verify(value, definitions)
@@ -62,7 +62,7 @@ class Setups:
         row = next((row for row in self.sharing.databases() if row["id"] == database_id), None)
         if (row is None or row.get("sharingMode") != "whole_database"
                 or row.get("kind") not in ("shareable", "received") or row.get("state") != "ready"):
-            raise SocialError("select a ready whole-database share by ID")
+            raise PeopleError("select a ready whole-database share by ID")
         return row
 
     def provision(self, name, definitions, *, existing=None):
@@ -73,13 +73,13 @@ class Setups:
             saved = self.reserve(name, key, existing)
         database_id = saved["fields"]["database_id"]
         if existing and existing["id"] != database_id:
-            raise SocialError("this setup is already bound to a different database")
+            raise PeopleError("this setup is already bound to a different database")
         if existing or saved["fields"]["ready"]:
             database = existing or self.database(database_id)
         else:
             database = self.sharing.create(name, whole=True, request_id=database_id)
         if database["id"] != database_id or database["kind"] != "shareable":
-            raise SocialError("this setup belongs to an owned database")
+            raise PeopleError("this setup belongs to an owned database")
         database_id = database["id"]
         if saved["fields"]["ready"]:
             return database, self.verify(database_id, definitions)
@@ -100,7 +100,7 @@ class Setups:
     def reserve(self, name, key, existing):
         if existing is None:
             if any(row.get("name") == name for row in self.sharing.databases()):
-                raise SocialError("that name is already in use; select the owned database by ID to finish setup")
+                raise PeopleError("that name is already in use; select the owned database by ID to finish setup")
         fields = {"database_id": existing["id"] if existing else str(uuid4()), "ready": False}
         try:
             written = self.node.write_record(SCHEMA, key, fields, None)
@@ -132,7 +132,7 @@ class Setups:
             if row is None and allow_missing:
                 continue
             if not matches(row, request):
-                raise SocialError(f"{name} does not match the shared-albums version 1 setup")
+                raise PeopleError(f"{name} does not match the shared-albums version 1 setup")
             verified[name] = row["definition_id"]
         return verified
 
@@ -140,7 +140,7 @@ class Setups:
 def declaration(database_id, request):
     """The declare_schema body. Both sockets send the catalog app_id.
 
-    The catalog name is the stored name, such as social/Album. Social does
+    The catalog name is the stored name, such as social/Album. People does
     not list that name in access.write. The databases extension is the grant
     for this call.
     """

@@ -1,4 +1,4 @@
-"""Run Social's owner commands and selected-database reads in DEV."""
+"""Run People's owner commands and selected-database reads in DEV."""
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "setups/shared-albums-v1"
 SPEC = {"name": "social", "version": 1}
 GROUPS = ("person", "circle", "db", "grant", "request")
-APP = "social-graph"
+APP = "people"
 RECEIPT = "lastdb-app-install.json"
 
 
@@ -31,18 +31,18 @@ def apps_dir(node):
 
 
 def prepare_launcher(node):
-    """Lay out the launcher tree and register social-graph on this node."""
+    """Lay out the launcher tree and register people on this node."""
     apps = apps_dir(node)
     current = apps / APP / "current"
     if not (current / RECEIPT).is_file():
         write_launcher_receipt(current)
-    link = apps / "bin" / "social"
+    link = apps / "bin" / "people"
     if not link.is_symlink():
         link.parent.mkdir(parents=True, mode=0o700)
         link.symlink_to(node.programs.directory / "lastdb")
-    if not getattr(node, "social_registered", False):
-        register_social(node, apps)
-        node.social_registered = True
+    if not getattr(node, "people_registered", False):
+        register_people(node, apps)
+        node.people_registered = True
     return link
 
 
@@ -68,7 +68,7 @@ def write_launcher_receipt(current):
     (current / RECEIPT).write_text(json.dumps(receipt), encoding="utf-8")
 
 
-def register_social(node, apps):
+def register_people(node, apps):
     manifest_path = apps / APP / "current" / "source" / "lastdb-app.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     # One recipe puts both nodes under one apps directory. Register still
@@ -82,11 +82,11 @@ def register_social(node, apps):
         "access": {"read": access["read"], "write": access["write"], "extensions": access["extensions"]},
         "data": str(data.resolve()),
     })
-    require(reply.get("app") == APP, "social_app_register")
+    require(reply.get("app") == APP, "people_app_register")
 
 
 def command(node):
-    """The `social` command, which is the launcher. It is not src/social itself.
+    """The `people` command, which is the launcher. It is not src/people itself.
 
     The launcher reads the node home from LASTDB_HOME before it sees --data-dir.
     A signed install keeps its own receipt. This still registers the app on the
@@ -105,58 +105,58 @@ def launcher_env(node):
 
 
 def sdk(node, action, **body):
-    # The Social client is this checkout's. LASTDB_APP_SDK holds the packed LastDB data client.
+    # The People client is this checkout's. LASTDB_APP_SDK holds the packed LastDB data client.
     require(Path(node.programs.environment.get("LASTDB_APP_SDK", ""), "dist/index.js").is_file(),
             "lastdb_app_sdk_missing")
     result = subprocess.run(
-        ["node", str(ROOT / "ci/social_sdk.mjs"), action, *command(node)],
+        ["node", str(ROOT / "ci/people_sdk.mjs"), action, *command(node)],
         input=json.dumps(body).encode(), capture_output=True, env=launcher_env(node), timeout=190,
     )
-    require(result.returncode == 0, f"social_sdk_{action}")
+    require(result.returncode == 0, f"people_sdk_{action}")
     return decode_json(result.stdout)
 
 
 def install(publisher, root, revision):
     programs = publisher.programs
-    require(len(revision) == 40 and all(char in "0123456789abcdef" for char in revision), "social_install_revision")
+    require(len(revision) == 40 and all(char in "0123456789abcdef" for char in revision), "people_install_revision")
     home = root / "os-home"
     home.mkdir(mode=0o700)
-    # The installer points the social command at this lastdb program.
+    # The installer points the people command at this lastdb program.
     launcher = home / ".local/bin/lastdb"
     launcher.parent.mkdir(parents=True, exist_ok=True)
     if not launcher.exists():
         launcher.symlink_to(programs.directory / "lastdb")
     extra = {"HOME": str(home), "LASTDB_APPS_ROOT": str(root / "apps"),
              "PATH": f"{programs.directory}:{os.environ['PATH']}"}
-    catalog = programs.environment.get("SOCIAL_INSTALL_REGISTRY") or "dev"
-    require(catalog in ("dev", "prod"), "social_install_registry")
+    catalog = programs.environment.get("PEOPLE_INSTALL_REGISTRY") or "dev"
+    require(catalog in ("dev", "prod"), "people_install_registry")
     profile = decode_json((lastdb_source() / "lastdb_node/environments.json").read_bytes())
     index = profile["environments"][catalog]["registry_index"]
     receipt = programs.command(publisher.home, [
-        "app", "install", "social-graph", "--channel", "next", "--index", index, "--accept-install", "--json",
+        "app", "install", "people", "--channel", "next", "--index", index, "--accept-install", "--json",
     ], extra=extra, timeout=150)
     require(isinstance(receipt, list) and len(receipt) == 1 and receipt[0]["sha"] == revision,
-            "social_install_exact_source")
+            "people_install_exact_source")
     # A restricted app's command link points at the lastdb program. Called as
-    # `social`, that program is the launcher.
-    link = home / ".local/bin/social"
-    require(link.is_symlink() and os.readlink(link) == str(launcher), "social_install_command")
-    summary(f"Installed Social from the signed {catalog.upper()} registry at `{revision}`. "
+    # `people`, that program is the launcher.
+    link = home / ".local/bin/people"
+    require(link.is_symlink() and os.readlink(link) == str(launcher), "people_install_command")
+    summary(f"Installed People from the signed {catalog.upper()} registry at `{revision}`. "
             "Recipes start that install through the launcher.")
 
 
-def social(node, *arguments, stdin=None, refusal=None, refusals=()):
-    """Run one Social command and decode its JSON result."""
+def people(node, *arguments, stdin=None, refusal=None, refusals=()):
+    """Run one People command and decode its JSON result."""
     label = "_".join(arguments[:2] if arguments[0] in GROUPS else arguments[:1]).replace("-", "_")
     try:
         result = subprocess.run([*command(node), *arguments],
                                 input=None if stdin is None else json.dumps(stdin).encode(),
                                 capture_output=True, env=launcher_env(node), timeout=180)
     except subprocess.TimeoutExpired as error:
-        raise OperationError(f"social_{label}_deadline") from error
+        raise OperationError(f"people_{label}_deadline") from error
     if refusal is not None:
         require(result.returncode == 1 and not result.stdout and refusal in result.stderr,
-                f"social_{label}_expected_refusal")
+                f"people_{label}_expected_refusal")
         return None
     if result.returncode:
         # An invitation is held in memory and must never enter workflow output.
@@ -164,13 +164,13 @@ def social(node, *arguments, stdin=None, refusal=None, refusals=()):
             require(fragment.encode() not in result.stderr, code)
         detail = result.stderr.decode(errors="replace").partition(" returned HTTP ")[2][:3]
         suffix = f"_http_{detail}" if detail.isascii() and detail.isdigit() else ""
-        raise OperationError(f"social_{label}_failed{suffix}")
+        raise OperationError(f"people_{label}_failed{suffix}")
     return decode_json(result.stdout)
 
 
 def pick(node, spec, intent, database):
     """Check one database selection. The result is its id, name and spec."""
-    return social(node, "pick-database", "--spec", spec["name"], "--version", str(spec["version"]),
+    return people(node, "pick-database", "--spec", spec["name"], "--version", str(spec["version"]),
                   "--intent", intent, "--database", database)
 
 
@@ -180,7 +180,7 @@ def content(node, app, method, path, body=None, status=200):
     with closing(Connection(node.socket)) as connection:
         connection.request(method, path, None if body is None else json.dumps(body).encode(), headers)
         with connection.getresponse() as reply:
-            require(reply.status == status, f"social_content_{app}_http_{reply.status}")
+            require(reply.status == status, f"people_content_{app}_http_{reply.status}")
             return decode_json(reply.read(65537)) if status == 200 else None
 
 
@@ -191,7 +191,7 @@ def read_named(node, app, schema, key, database=None):
         item["database"] = database
     reply = content(node, app, "POST", "/v1/read", {"reads": [item]})
     require(isinstance(reply.get("results"), list) and len(reply["results"]) == 1,
-            f"social_content_{app}_read")
+            f"people_content_{app}_read")
     return reply["results"][0]
 
 
@@ -252,18 +252,18 @@ def owned_item(database, update):
 
 
 def open_content_apps(recipient, database):
-    choices = social(recipient, "pick-database", "--spec", SPEC["name"], "--version", str(SPEC["version"]),
+    choices = people(recipient, "pick-database", "--spec", SPEC["name"], "--version", str(SPEC["version"]),
                      "--intent", "read")
-    require(any(row["databaseId"] == database for row in choices), "social_picker_received_database")
+    require(any(row["databaseId"] == database for row in choices), "people_picker_received_database")
     selections = [(name, pick(recipient, SPEC, "read", database)) for name in ("album-viewer", "photo-journal")]
     require(all(selection["databaseId"] == database and selection["spec"] == SPEC
-                for _, selection in selections), "social_picker_shared_database")
+                for _, selection in selections), "people_picker_shared_database")
     refused = {"database": database, "schema": "social/Album", "op": "create",
                "key": {"hash": "album-refused"}, "record": {"title": "refused"}}
     for app, _selection in selections:
         # The personal database is the read that omits database. It is not this share.
         personal = read_named(recipient, app, "social/Album", "album-0")
-        require("records" not in personal or personal["records"] == [], f"social_content_{app}_personal")
+        require("records" not in personal or personal["records"] == [], f"people_content_{app}_personal")
         # The roster is an owner route. A received database is not this node's share.
         content(recipient, app, "GET", f"/api/databases/{database}/share/config", status=404)
         # A received database is read-only on the app write route.
@@ -294,7 +294,7 @@ def observe_access(node, database, state, revision=None, *, role="read", write_s
                 and (revision is None or access["revision"] == str(revision))
                 and (state != "active" or access["role"] == role)
                 and (write_schemas is None or access.get("writeSchemas") == write_schemas))
-    retry(f"social_recipient_access_{state}", lambda: social(node, "db", "show", database), matches)
+    retry(f"people_recipient_access_{state}", lambda: people(node, "db", "show", database), matches)
 
 
 def report_content_flow():

@@ -1,9 +1,9 @@
-"""List this commit of Social in the DEV registry, from a fresh node.
+"""List this commit of People in the DEV registry, from a fresh node.
 
-A registry listing is tied to one exact LastDB API version, so Social has to
+A registry listing is tied to one exact LastDB API version, so People has to
 be listed again after each LastDB API change. `lastdb app publish` takes the
 API version from the node it talks to, and it refuses a node that holds an
-app schema the manifest does not list. A node that ran an older Social holds
+app schema the manifest does not list. A node that ran an older People holds
 such schemas. This command therefore starts a new, empty node from the given
 LastDB programs, places this checkout's schemas the way the installer does,
 and publishes against that node. The node and its home are removed after.
@@ -29,15 +29,15 @@ import sys
 import tempfile
 
 from node import OwnedNode, Programs
-from social_app import ROOT
+from people_app import ROOT
 from support import OperationError, failure, require, running
 
 sys.path.insert(0, str(ROOT / "src"))
-from app import SocialApp  # noqa: E402
+from app import PeopleApp  # noqa: E402
 from lastdb import LastDB  # noqa: E402
 
-APP_ID = "social-graph"
-SOURCE = "https://github.com/EdgeVector/social.git"
+APP_ID = "people"
+SOURCE = "https://github.com/EdgeVector/people.git"
 FIELDS = ("app_id", "app_version", "sha", "api_version", "lastdb_build", "channel", "source")
 
 
@@ -75,7 +75,7 @@ def publish():
                    "--channel", "next", "--manifest", str(ROOT / "lastdb-app.json")]
         with running(node):
             lastdb = LastDB(home, programs.directory / "lastdb")
-            app = SocialApp(lastdb)
+            app = PeopleApp(lastdb)
             app.home()
             app.sharing.pending_edit("registry-preflight")
             subprocess.run([*command, "--prepare", str(declaration)], check=True, timeout=60,

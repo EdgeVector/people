@@ -1,10 +1,10 @@
-"""Map each `social NOUN VERB` command to its owner operation."""
+"""Map each `people NOUN VERB` command to its owner operation."""
 
 import json
 import sys
 
 import changes
-from lastdb import SocialError
+from lastdb import PeopleError
 from sharing import read_invitation
 
 
@@ -104,10 +104,10 @@ def invite(app, args):
 def request_submit(app, _args):
     raw = sys.stdin.buffer.read(16385)
     if not 0 < len(raw) <= 16384:
-        raise SocialError("provide a sharing declaration within 16 KiB")
+        raise PeopleError("provide a sharing declaration within 16 KiB")
     request = json.loads(raw)
     if not isinstance(request, dict):
-        raise SocialError("provide a sharing declaration")
+        raise PeopleError("provide a sharing declaration")
     return app.sharing_requests.submit(request)
 
 

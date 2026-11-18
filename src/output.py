@@ -93,14 +93,14 @@ def change(value):
             lines.append(f"{title}: {names.get(item['nodeKey'], item['nodeKey'])}: "
                          f"{grant(item['before'])} -> {grant(item['after'])}")
         for item in row.get("conflicts", []):
-            lines.append(f"{title}: {names.get(item['nodeKey'], item['nodeKey'])} was changed outside Social "
+            lines.append(f"{title}: {names.get(item['nodeKey'], item['nodeKey'])} was changed outside People "
                          f"to {grant(item['current'])}")
     if value.get("pending"):
-        lines.append(f"unfinished: {', '.join(value['pending'])}. Run `social db retry`.")
+        lines.append(f"unfinished: {', '.join(value['pending'])}. Run `people db retry`.")
     if "status" in value and "databases" not in value:
         lines.append(f"status: {value['status']}" + (f" at revision {value['revision']}" if "revision" in value else ""))
     if value.get("applied") is False or ("token" in value and "applied" not in value):
-        lines.append("Nothing was changed. " + ("Approve it with `social request approve`."
+        lines.append("Nothing was changed. " + ("Approve it with `people request approve`."
                                                 if "requestId" in value else "Rerun with --apply to make this change."))
         if "token" in value:
             lines.append(f"token: {value['token']}")

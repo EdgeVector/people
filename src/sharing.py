@@ -8,12 +8,12 @@ import json
 import time
 import uuid
 
-from lastdb import LastDBError, SocialError
+from lastdb import LastDBError, PeopleError
 
 
 SPEC = {"name": "social", "version": 1}
 TRANSPORT_ERRORS = (OSError, http.client.HTTPException)
-PENDING_SCHEMA = "social-graph/SharingUpdate"
+PENDING_SCHEMA = "people/SharingUpdate"
 UNREAD = object()
 
 
@@ -38,13 +38,13 @@ class Sharing:
         matches = [row for row in self.databases()
                    if selector in (row.get("id"), row.get("name"))]
         if len(matches) != 1 or not can_manage_sharing(matches[0]):
-            raise SocialError(f"{selector} needs an owned database with a supported sharing format")
+            raise PeopleError(f"{selector} needs an owned database with a supported sharing format")
         return matches[0]
 
     def configuration(self, database_id):
         reply = self.node.databases("share_config", database=database_id)
         if reply["databaseId"] != database_id:
-            raise SocialError("LastDB returned the configuration of a different database")
+            raise PeopleError("LastDB returned the configuration of a different database")
         return {key: reply[key] for key in ("databaseId", "revision", "members")}
 
     def all_configurations(self, selector):
@@ -77,14 +77,14 @@ class Sharing:
             previous = members.get(node_key)
             desired = "active" if active else "revoked"
             if active and previous and previous["state"] == "active" and previous["role"] != "read":
-                raise SocialError("this person already has contributor access; revoke it before granting reader access")
+                raise PeopleError("this person already has contributor access; revoke it before granting reader access")
             if previous and previous["state"] == desired:
                 return current["revision"]
             if starting_member is not UNREAD and previous != starting_member:
-                raise SocialError("this person's access changed concurrently; review the current grant")
+                raise PeopleError("this person's access changed concurrently; review the current grant")
             starting_member = previous
             if previous is None and not active:
-                raise SocialError("the recipient has never been granted access to this database")
+                raise PeopleError("the recipient has never been granted access to this database")
             scoped = previous is not None and "writeSchemas" in previous
             member = {"nodeKey": node_key, "role": "read" if active else previous["role"],
                       "state": desired}
@@ -103,17 +103,17 @@ class Sharing:
                 continue
             if revision is not None:
                 return revision
-        raise SocialError("the sharing configuration changed concurrently; retry the operation")
+        raise PeopleError("the sharing configuration changed concurrently; retry the operation")
 
     def apply_members(self, database_id, expected_revision, members, circles):
         previous = self.node.get_record(PENDING_SCHEMA, database_id)
         if previous and previous["fields"]["request"]:
-            raise SocialError("finish the pending sharing change first")
+            raise PeopleError("finish the pending sharing change first")
         request = {"expectedRevision": expected_revision, "requestId": str(uuid.uuid4()),
                    "members": members, "circles": circles}
         revision = self.save_update(database_id, previous, request)
         if revision is None:
-            raise SocialError("sharing changed while you edited it; review the current roster")
+            raise PeopleError("sharing changed while you edited it; review the current roster")
         return revision
 
     def save_update(self, database_id, previous, request):
@@ -138,7 +138,7 @@ class Sharing:
         request = json.loads(saved["fields"]["request"])
         if any(member.get("regrant") and member["role"] == "submit" and "writeSchemas" not in member
                for member in request["members"]):
-            raise SocialError("a pending contributor regrant requires owner review")
+            raise PeopleError("a pending contributor regrant requires owner review")
         try:
             revision = self.apply(database_id, request)
         except LastDBError as error:
@@ -180,18 +180,18 @@ class Sharing:
                 if (ack["databaseId"] != database_id or ack["requestId"] != update["requestId"]
                         or ack["committed"] is not True
                         or int(ack["revision"]) != int(update["expectedRevision"]) + 1):
-                    raise SocialError("LastDB returned a mismatched sharing acknowledgement")
+                    raise PeopleError("LastDB returned a mismatched sharing acknowledgement")
                 return ack["revision"]
 
     def invite(self, selector, display_name, node_key, contact_path=None):
         database_id = self.owned(selector)["id"]
         publisher = self.node.own_key()
         if publisher == node_key:
-            raise SocialError("the database owner already has access")
+            raise PeopleError("the database owner already has access")
         if contact_path is None:
             person = self.people.by_keys([node_key]).get(node_key)
             if not person or not person.get("contact_code", "").startswith("lastdb-share-contact-v1."):
-                raise SocialError("provide the recipient's verified contact file with --contact")
+                raise PeopleError("provide the recipient's verified contact file with --contact")
             verified = self.node.verify_saved_contact(person["contact_code"], node_key)
         else:
             verified = self.node.verify_contact(contact_path, node_key)
@@ -204,13 +204,13 @@ class Sharing:
         response = self.node.databases(
             "invite", database=database_id, contactCode=contact_code, expectedNodeKey=node_key)
         if response["databaseId"] != database_id or not response.get("invitation"):
-            raise SocialError("LastDB returned a mismatched invitation")
+            raise PeopleError("LastDB returned a mismatched invitation")
         return {"databaseId": database_id, "revision": revision, "publisher": publisher,
                 "invitation": response["invitation"]}
 
     def accept(self, receipt, publisher, name):
         if receipt.get("publisher") != publisher:
-            raise SocialError("invitation publisher differs from the trusted publisher")
+            raise PeopleError("invitation publisher differs from the trusted publisher")
         return self.node.databases(
             "accept", invitation=receipt["invitation"], publisher=publisher,
             database_id=receipt["databaseId"], name=name)["database"]
@@ -219,8 +219,8 @@ class Sharing:
 def read_invitation(stream):
     raw = stream.read(8193)
     if len(raw) > 8192:
-        raise SocialError("invitation receipt exceeds its size limit")
+        raise PeopleError("invitation receipt exceeds its size limit")
     value = json.loads(raw)
     if not isinstance(value, dict):
-        raise SocialError("expected a Social invitation receipt")
+        raise PeopleError("expected a People invitation receipt")
     return value

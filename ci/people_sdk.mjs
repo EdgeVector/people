@@ -2,10 +2,10 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { socialClient } from '../client/index.mjs';
+import { peopleClient } from '../client/index.mjs';
 
-const [action, socialPath, , dataDir, , lastdbPath] = process.argv.slice(2);
-const social = socialClient({ dataDir, socialPath, lastdbPath });
+const [action, peoplePath, , dataDir, , lastdbPath] = process.argv.slice(2);
+const people = peopleClient({ dataDir, peoplePath, lastdbPath });
 const input = JSON.parse(readFileSync(0, 'utf8'));
 
 // Content reads use the LastDB app SDK built from the source of the build under test.
@@ -18,37 +18,37 @@ try {
   let result;
   switch (action) {
     case 'create':
-      result = await social.createDatabase(input.name);
+      result = await people.createDatabase(input.name);
       break;
     case 'create-shared':
-      result = await social.createSharedDatabase(input.name);
+      result = await people.createSharedDatabase(input.name);
       break;
     case 'setup':
-      result = await social.setupDatabase(input);
+      result = await people.setupDatabase(input);
       break;
     case 'circles':
-      result = await social.listCircles();
+      result = await people.listCircles();
       break;
     case 'request-sharing':
-      result = await social.requestSharing(input);
+      result = await people.requestSharing(input);
       break;
     case 'sharing-status':
-      result = await social.getSharingStatus(input.requestId);
+      result = await people.getSharingStatus(input.requestId);
       break;
     case 'invite':
-      result = await social.inviteReader(input.database, input.recipient);
+      result = await people.inviteReader(input.database, input.recipient);
       break;
     case 'seal':
-      result = await social.sealInvitation(input.database, input.nodeKey);
+      result = await people.sealInvitation(input.database, input.nodeKey);
       break;
     case 'accept':
-      result = await social.acceptInvitation(input.receipt, input.publisher, input.name);
+      result = await people.acceptInvitation(input.receipt, input.publisher, input.name);
       break;
     case 'revoke':
-      result = await social.revokeAccess(input.database, input.nodeKey);
+      result = await people.revokeAccess(input.database, input.nodeKey);
       break;
     case 'read': {
-      const root = await connect({ appId: input.appId ?? 'social-dev-sdk', socketPath: join(dataDir, 'data', 'folddb.sock') });
+      const root = await connect({ appId: input.appId ?? 'people-dev-sdk', socketPath: join(dataDir, 'data', 'folddb.sock') });
       const [page] = await root.read([{
         database: input.database,
         schema: input.schema,
@@ -62,12 +62,12 @@ try {
       break;
     }
     case 'list-databases': {
-      const root = await connect({ appId: 'social-dev-sdk', socketPath: join(dataDir, 'data', 'folddb.sock') });
+      const root = await connect({ appId: 'people-dev-sdk', socketPath: join(dataDir, 'data', 'folddb.sock') });
       result = await root.listDatabases();
       break;
     }
     case 'submission-status': {
-      const root = await connect({ appId: 'social-dev-sdk', socketPath: join(dataDir, 'data', 'folddb.sock') });
+      const root = await connect({ appId: 'people-dev-sdk', socketPath: join(dataDir, 'data', 'folddb.sock') });
       const client = root.select(input.database);
       result = await Promise.all(input.ids.map(id => client.getShareSubmissionStatus(id)));
       break;

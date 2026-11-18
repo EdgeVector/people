@@ -1,12 +1,12 @@
-"""Social's connection to a local LastDB.
+"""People's connection to a local LastDB.
 
 Record reads and writes use `POST /v1/read` and `POST /v1/write`. Named
 databases and sharing use `POST /v1/x/databases`. The installer places the
-schemas in `lastdb-app.json`. Social does not declare those while it runs.
+schemas in `lastdb-app.json`. People does not declare those while it runs.
 
 The launcher sets `LASTDB_SOCKET_PATH` to the app socket and `LASTDB_APP` to
 the app id. The app id is sent as `X-LastDB-App` on `/v1/` calls. Without
-them, Social uses the owner socket `<home>/data/folddb.sock` and sends no app
+them, People uses the owner socket `<home>/data/folddb.sock` and sends no app
 id header. `declare_schema` sends the catalog `app_id` on either socket.
 """
 
@@ -22,11 +22,11 @@ import subprocess
 import tempfile
 
 
-class SocialError(Exception):
+class PeopleError(Exception):
     pass
 
 
-class LastDBError(SocialError):
+class LastDBError(PeopleError):
     def __init__(self, method, path, status, body):
         self.status = status
         self.body = body
@@ -72,19 +72,19 @@ def record_mutation(schema, key, fields, previous):
     if fields is None:
         revision = previous.get("revision") if previous else None
         if not revision:
-            raise SocialError("a delete needs the revision from a read")
+            raise PeopleError("a delete needs the revision from a read")
         return {**mutation, "op": "delete", "revision": revision}
     if not previous:
         return {**mutation, "op": "create", "record": fields}
     revision = previous.get("revision")
     if not revision:
-        raise SocialError("a replace needs the revision from a read")
+        raise PeopleError("a replace needs the revision from a read")
     return {**mutation, "op": "replace", "revision": revision, "record": fields}
 
 
 def read_result(item):
     if not isinstance(item, dict):
-        raise SocialError("LastDB returned an invalid read result")
+        raise PeopleError("LastDB returned an invalid read result")
     if "error" in item:
         raise LastDBError("POST", "/v1/read", 400, item)
     cursor = item.get("next_cursor")
@@ -92,14 +92,14 @@ def read_result(item):
         return {"records": [record_row(row) for row in item["records"]], "next_cursor": cursor}
     if "keys" in item and "records" not in item and isinstance(item["keys"], list):
         return {"keys": item["keys"], "next_cursor": cursor}
-    raise SocialError("LastDB returned a read result with no records or keys")
+    raise PeopleError("LastDB returned a read result with no records or keys")
 
 
 def record_row(record):
     fields = record.get("record") if isinstance(record, dict) else None
     revision = record.get("revision") if isinstance(record, dict) else None
     if not isinstance(fields, dict) or not isinstance(revision, str) or not revision:
-        raise SocialError("LastDB returned an invalid record")
+        raise PeopleError("LastDB returned an invalid record")
     return {"fields": fields, "revision": revision, "key": record.get("key"), "file": record.get("file")}
 
 
@@ -112,17 +112,17 @@ class LastDB:
         self.app_id = os.environ.get("LASTDB_APP")
 
     def state_dir(self):
-        """Social's own files. The launcher names this directory in LASTDB_APP_DATA."""
+        """People's own files. The launcher names this directory in LASTDB_APP_DATA."""
         configured = os.environ.get("LASTDB_APP_DATA")
         return Path(configured) if configured else self.home
 
     def scratch(self):
         root = os.environ.get("LASTDB_APP_DATA")
-        return tempfile.TemporaryDirectory(prefix="social-contact-", dir=root or None)
+        return tempfile.TemporaryDirectory(prefix="people-contact-", dir=root or None)
 
     def call(self, method, path, body=None, *, request_id=None, expect_ok=True, statuses=(200,)):
         payload = None if body is None else json.dumps(body, separators=(",", ":")).encode()
-        headers = {"X-LastDB-Client": "social", "Content-Type": "application/json"}
+        headers = {"X-LastDB-Client": "people", "Content-Type": "application/json"}
         if request_id is not None:
             headers["Idempotency-Key"] = request_id
         if self.app_id and path.startswith("/v1/"):
@@ -133,7 +133,7 @@ class LastDB:
                 raw = response.read(8 * 1024 * 1024 + 1)
                 status = response.status
         if len(raw) > 8 * 1024 * 1024:
-            raise SocialError("LastDB reply exceeds the Social response limit")
+            raise PeopleError("LastDB reply exceeds the People response limit")
         try:
             result = json.loads(raw)
         except (ValueError, UnicodeError):
@@ -155,22 +155,22 @@ class LastDB:
 
     def read(self, reads):
         if not 1 <= len(reads) <= 64:
-            raise SocialError("a read holds 1 to 64 items")
+            raise PeopleError("a read holds 1 to 64 items")
         body = self.call("POST", "/v1/read", {"reads": reads}, expect_ok=False)
         results = body.get("results")
         if not isinstance(results, list) or len(results) != len(reads):
-            raise SocialError("LastDB returned an incomplete read")
+            raise PeopleError("LastDB returned an incomplete read")
         return [read_result(item) for item in results]
 
     def write(self, mutations):
         if not mutations:
-            raise SocialError("a write holds at least one mutation")
+            raise PeopleError("a write holds at least one mutation")
         body = self.call("POST", "/v1/write", {"mutations": mutations}, expect_ok=False)
         revisions = body.get("revisions")
         if (body.get("written") != len(mutations) or not isinstance(revisions, list)
                 or len(revisions) != len(mutations)
                 or any(not isinstance(item, str) or not item for item in revisions)):
-            raise SocialError("LastDB returned an incomplete write")
+            raise PeopleError("LastDB returned an incomplete write")
         return {"written": len(mutations), "revisions": revisions}
 
     def get_record(self, schema, key):
@@ -204,7 +204,7 @@ class LastDB:
         command = [str(self.executable), "--data-dir", str(self.home), *arguments]
         result = subprocess.run(command, capture_output=True, text=True, timeout=20)
         if result.returncode:
-            raise SocialError(result.stderr.strip() or f"LastDB {arguments[0]} failed")
+            raise PeopleError(result.stderr.strip() or f"LastDB {arguments[0]} failed")
         return json.loads(result.stdout)
 
     def verify_contact(self, path, expected_key):

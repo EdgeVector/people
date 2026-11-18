@@ -1,9 +1,9 @@
-"""Social's owner operations on one LastDB node."""
+"""People's owner operations on one LastDB node."""
 
 from concurrent.futures import ThreadPoolExecutor
 import re
 
-from lastdb import SocialError
+from lastdb import PeopleError
 from circles import Circles
 from people import People
 from reusable_circles import ReusableCircles
@@ -25,7 +25,7 @@ def can_submit_received(row):
             and access.get("stale") is False)
 
 
-class SocialApp:
+class PeopleApp:
     def __init__(self, node):
         self.node = node
         self.people = People(node)
@@ -50,15 +50,15 @@ class SocialApp:
         person = self.people.by_keys([node_key])[node_key]
         circles = [row["name"] for row in self.reusable_circles.load().circles if node_key in row["members"]]
         if circles:
-            raise SocialError(f"remove this person from these circles first: {', '.join(circles)}")
+            raise PeopleError(f"remove this person from these circles first: {', '.join(circles)}")
         configs = self.sharing.all_configurations(None)
         unknown = [config["name"] for config in configs if "status" in config]
         if unknown:
-            raise SocialError(f"could not confirm the roster of: {', '.join(unknown)}")
+            raise PeopleError(f"could not confirm the roster of: {', '.join(unknown)}")
         active = [config["name"] for config in configs for member in config["members"]
                   if member["nodeKey"] == node_key and member["state"] == "active"]
         if active:
-            raise SocialError(f"revoke this person's access first on: {', '.join(active)}")
+            raise PeopleError(f"revoke this person's access first on: {', '.join(active)}")
         self.people.remove(node_key)
         return {**public_person(person), "removed": True}
 
@@ -77,11 +77,11 @@ class SocialApp:
         for item in selectors:
             matches = by_name.get(item, []) if item in named else [item]
             if len(matches) != 1:
-                raise SocialError(f"expected one saved contact named {item}; use the node key")
+                raise PeopleError(f"expected one saved contact named {item}; use the node key")
             keys.append(matches[0])
         direct = sorted(set(selectors) - named)
         if known and direct and self.people.by_keys(direct).keys() != set(direct):
-            raise SocialError("save this person's verified contact first")
+            raise PeopleError("save this person's verified contact first")
         return keys
 
     def create(self, name, whole=True):
@@ -93,7 +93,7 @@ class SocialApp:
     def accept(self, receipt, publisher, name):
         require_node_key(publisher)
         if not isinstance(receipt, dict):
-            raise SocialError("enter the sealed invitation receipt")
+            raise PeopleError("enter the sealed invitation receipt")
         return self.sharing.accept(receipt, publisher, checked_name(name) if name else None)
 
     def home(self):
@@ -156,7 +156,7 @@ class SocialApp:
         matches = [row for row in circles
                    if selector == row["id"] or selector.casefold() == row["name"].casefold()]
         if len(matches) != 1:
-            raise SocialError(f"there is no circle named {selector}")
+            raise PeopleError(f"there is no circle named {selector}")
         return matches[0]
 
     def circle_view(self, selector):
@@ -177,10 +177,10 @@ class SocialApp:
         """Seal an invitation for an active grant on an owned whole-database share."""
         person = self.people.by_keys([node_key]).get(node_key)
         if person is None:
-            raise SocialError("save this person's verified contact first")
+            raise PeopleError("save this person's verified contact first")
         config = self.sharing.configuration(database["id"])
         if not any(row["nodeKey"] == node_key and row["state"] == "active" for row in config["members"]):
-            raise SocialError("grant access with a circle or `social grant set` before sealing an invitation")
+            raise PeopleError("grant access with a circle or `people grant set` before sealing an invitation")
         return self.sharing.seal(database["id"], node_key, person["contact_code"], config["revision"],
                                  self.node.own_key())
 
@@ -188,20 +188,20 @@ class SocialApp:
         rows = self.sharing.databases() if rows is None else rows
         matches = [row for row in rows if selector in (row["id"], row.get("name"))]
         if len(matches) != 1:
-            raise SocialError(f"{selector} is not one database registered on this device")
+            raise PeopleError(f"{selector} is not one database registered on this device")
         return matches[0]
 
     def owned_whole(self, selector, rows=None):
         database = self.selected(selector, rows)
         if database.get("sharingMode") != "whole_database" or not can_manage_sharing(database):
-            raise SocialError(f"{selector} needs an owned whole-database share")
+            raise PeopleError(f"{selector} needs an owned whole-database share")
         return database
 
     def picker(self, spec, intent):
         if (not isinstance(spec, dict) or not isinstance(spec.get("name"), str)
                 or type(spec.get("version")) is not int
                 or not 1 <= spec["version"] <= 4_294_967_295 or intent not in ("read", "write")):
-            raise SocialError("select a database spec and a read or write intent")
+            raise PeopleError("select a database spec and a read or write intent")
         return [{"databaseId": row["id"], "name": row["name"], "spec": row["spec"],
                  "kind": row["kind"], "state": row["state"], "selfAccess": row.get("selfAccess")}
                 for row in self.sharing.databases() if row.get("spec") == spec
@@ -212,16 +212,16 @@ class SocialApp:
         for choice in self.picker(spec, intent):
             if choice["databaseId"] == database_id:
                 return {key: choice[key] for key in ("databaseId", "name", "spec")}
-        raise SocialError("this database cannot be selected for the requested use")
+        raise PeopleError("this database cannot be selected for the requested use")
 
 
 def require_node_key(key):
     if not isinstance(key, str) or not NODE_KEY.fullmatch(key):
-        raise SocialError("enter the verified LastDB node key")
+        raise PeopleError("enter the verified LastDB node key")
     return key
 
 
 def checked_name(name):
     if not isinstance(name, str) or not 1 <= len(name.strip()) <= 100:
-        raise SocialError("enter a name of 1 to 100 characters")
+        raise PeopleError("enter a name of 1 to 100 characters")
     return name.strip()

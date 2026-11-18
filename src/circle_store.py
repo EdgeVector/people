@@ -17,7 +17,7 @@ def encoded(value):
 
 
 def schema_name(kind):
-    return f"social-graph/{kind[0]}"
+    return f"people/{kind[0]}"
 
 
 class Directory:

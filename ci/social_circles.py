@@ -16,13 +16,16 @@ from support import OperationError, decode_json, require, retry, run_operation, 
 SCOPE = {"name": "whole-database", "version": 1}
 ALBUM = "dev-albums/Album"
 COMMENT = "dev-comments/Comment"
+# LastDB applies comment authorship only to this schema name.
 STANDARD_COMMENT = "social/Comment"
 COMMENT_GRANT = {"names": [COMMENT, STANDARD_COMMENT]}
 REFUSALS = (
     ("select writable schemas", "circle_invalid_schema_selection"),
     ("save verified contacts", "circle_contact_unavailable"),
+    ("share configuration is not confirmed", "circle_lastdb_unconfirmed"),
     ("share_configuration_unconfirmed", "circle_lastdb_unconfirmed"),
     ("invalid_share_configuration", "circle_lastdb_rejected_config"),
+    ("the share configuration is at another revision", "circle_revision_changed"),
     ("share_update_pending", "circle_update_pending"),
     ("mismatched sharing acknowledgement", "circle_ack_mismatch"),
     ("changed while you edited", "circle_revision_changed"),
@@ -61,6 +64,7 @@ def wait_text(node, database, schema, key, text, stage):
 
 
 def submit(node, database, update, *, mutation_id=None):
+    # The member submits on the owner socket. This is not a Social command.
     mutation_id = mutation_id or str(uuid.uuid4())
     with closing(Connection(node.socket)) as connection:
         connection.request("POST", f"/api/databases/{database}/submissions", json.dumps(update), {

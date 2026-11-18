@@ -1,37 +1,37 @@
-# Social client for JavaScript apps
+# People client for JavaScript apps
 
-`@lastdb/social-client` lets a JavaScript or TypeScript app use Social. It is a
-thin wrapper: each method runs the installed `social` command, reads the JSON
+`@lastdb/people-client` lets a JavaScript or TypeScript app use People. It is a
+thin wrapper: each method runs the installed `people` command, reads the JSON
 it prints, checks its shape, and returns it. It has no dependencies and no
 build step.
 
-It ships inside Social's source, so it always matches the Social it sits next
-to. With Social installed from the app registry, the package is the `client`
-folder of the installed source: `<apps root>/social-graph/current/source/client`.
+It ships inside People's source, so it always matches the People it sits next
+to. With People installed from the app registry, the package is the `client`
+folder of the installed source: `<apps root>/people/current/source/client`.
 Import it from there, or copy the folder into your app.
 
-Social manages verified contacts, reusable circles, and invitations. For
+People manages verified contacts, reusable circles, and invitations. For
 schemas, records, and files, use `connect` and `select` from `@lastdb/app-sdk`.
 Point both at the same LastDB home. The publisher needs a connected ExeMem
 account.
 
 | Method | Command it runs |
 | --- | --- |
-| `listCircles()` | `social circle list` |
-| `requestSharing(request)` | `social request submit`, with the request on standard input |
-| `getSharingStatus(requestId)` | `social request status ID` |
-| `createSharedDatabase(name)` | `social db create NAME` |
-| `setupDatabase(request)` | `social db create --setup ...` or `social db verify ...` |
-| `sealInvitation(databaseId, nodeKey)` | `social invite DATABASE PERSON` |
-| `acceptInvitation(invitation, publisherKey, name?)` | `social db accept`, with the invitation on standard input |
-| `revokeAccess(database, nodeKey)` | `social grant revoke --apply DATABASE PERSON` |
-| `createDatabase(name)` | `social db create --filtered NAME` |
-| `inviteReader(database, recipient)` | `social invite --name ... DATABASE PERSON` |
+| `listCircles()` | `people circle list` |
+| `requestSharing(request)` | `people request submit`, with the request on standard input |
+| `getSharingStatus(requestId)` | `people request status ID` |
+| `createSharedDatabase(name)` | `people db create NAME` |
+| `setupDatabase(request)` | `people db create --setup ...` or `people db verify ...` |
+| `sealInvitation(databaseId, nodeKey)` | `people invite DATABASE PERSON` |
+| `acceptInvitation(invitation, publisherKey, name?)` | `people db accept`, with the invitation on standard input |
+| `revokeAccess(database, nodeKey)` | `people grant revoke --apply DATABASE PERSON` |
+| `createDatabase(name)` | `people db create --filtered NAME` |
+| `inviteReader(database, recipient)` | `people invite --name ... DATABASE PERSON` |
 
-A failed command throws `SocialError` with `code: 'command_failed'` and
-Social's own `social: ...` line as the message. Output of an unexpected shape
-throws `SocialError` with `code: 'invalid_response'`. A database result is the
-row Social prints, which is LastDB's own database row; `id` is always present.
+A failed command throws `PeopleError` with `code: 'command_failed'` and
+People's own `people: ...` line as the message. Output of an unexpected shape
+throws `PeopleError` with `code: 'invalid_response'`. A database result is the
+row People prints, which is LastDB's own database row; `id` is always present.
 
 ## Share an app's own database
 
@@ -46,33 +46,33 @@ standard album and comment schemas, use the setup below.
 ```ts
 import { join } from 'node:path';
 import { connect } from '@lastdb/app-sdk';
-import { socialClient } from '@lastdb/social-client';
+import { peopleClient } from '@lastdb/people-client';
 
-const social = socialClient({ dataDir: publisherHome });
+const people = peopleClient({ dataDir: publisherHome });
 const root = await connect({
   appId: 'photo-journal',
   socketPath: join(publisherHome, 'data', 'folddb.sock'),
 });
-const database = await social.createSharedDatabase('family-trips');
+const database = await people.createSharedDatabase('family-trips');
 const trips = root.select(database.id);
 await trips.declareSchema(tripSchema);
 ```
 
-The owner runs Social on the publisher's device to add verified contacts and
+The owner runs People on the publisher's device to add verified contacts and
 link a circle to the database, for example
-`social circle set Family --members Ana --link family-trips=read`. The command
+`people circle set Family --members Ana --link family-trips=read`. The command
 prints the resulting access. Adding `--apply` makes the change. Use
-`social db show ID` to see the database's roster. After Social confirms the
+`people db show ID` to see the database's roster. After People confirms the
 grant, the app can get a sealed receipt with
-`await social.sealInvitation(database.id, anaVerifiedKey)`. The caller delivers
+`await people.sealInvitation(database.id, anaVerifiedKey)`. The caller delivers
 the receipt to Ana. Keep sealed receipts out of logs.
 
-On Ana's device, use a Social client pointed at her home. Pass the publisher
+On Ana's device, use a People client pointed at her home. Pass the publisher
 key verified independently of the receipt, and save the returned database ID.
 
 ```ts
-const recipientSocial = socialClient({ dataDir: recipientHome });
-const received = await recipientSocial.acceptInvitation(receipt, verifiedPublisherKey, 'family-trips');
+const recipientPeople = peopleClient({ dataDir: recipientHome });
+const received = await recipientPeople.acceptInvitation(receipt, verifiedPublisherKey, 'family-trips');
 const recipient = await connect({
   appId: 'photo-journal',
   socketPath: join(recipientHome, 'data', 'folddb.sock'),
@@ -94,18 +94,18 @@ locally. Show the change as pending from `getShareSubmissionStatus` until
 the publisher accepts it. `POST /v1/write` to a received database is refused.
 
 Use the same id in the `database` field when another app reads this share on
-Ana's device. The owner can manage access in Social or revoke a recipient with
-`await social.revokeAccess(database.id, anaVerifiedKey)`.
+Ana's device. The owner can manage access in People or revoke a recipient with
+`await people.revokeAccess(database.id, anaVerifiedKey)`.
 
 ## Propose circle sharing
 
-Choose a circle from `await social.listCircles()` and submit a declaration.
+Choose a circle from `await people.listCircles()` and submit a declaration.
 Use one stable UUID for the request and its retries.
 
 ```ts
 import { randomUUID } from 'node:crypto';
 
-const request = await social.requestSharing({
+const request = await people.requestSharing({
   requestId: randomUUID(),
   appId: 'photo-journal',
   change: {
@@ -117,10 +117,10 @@ const request = await social.requestSharing({
 });
 ```
 
-The owner reviews the proposal with `social request show <requestId>` and
-decides with `social request approve <requestId>` or
-`social request decline <requestId>`, using the same LastDB home. The app can
-fetch the result with `social.getSharingStatus(request.requestId)`. Status is
+The owner reviews the proposal with `people request show <requestId>` and
+decides with `people request approve <requestId>` or
+`people request decline <requestId>`, using the same LastDB home. The app can
+fetch the result with `people.getSharingStatus(request.requestId)`. Status is
 `awaitingApproval`, `pending`, `needsReview`, `confirmed`, or `declined`.
 Retrying the same request UUID returns that outcome. When confirmed, use
 `sealInvitation` for a new recipient. Use `writeSchemas` in place of a preset
@@ -136,17 +136,17 @@ proposal.
 
 ## Use a named database setup
 
-Social can provision **shared-albums** version 1 with the standard
+People can provision **shared-albums** version 1 with the standard
 `social/Album`, `social/AlbumItem`, `social/Photo`, and `social/Comment`
 schemas. The owner chooses a local name for provisioning. Other apps open the
 selected database by its stable ID and get the verified definitions. Record
 reads and writes then name that id in `database`.
 
 ```ts
-const created = await social.setupDatabase({
+const created = await people.setupDatabase({
   setupName: 'shared-albums', requiredVersion: 1, localName: 'family',
 });
-const verified = await social.setupDatabase({
+const verified = await people.setupDatabase({
   setupName: 'shared-albums', requiredVersion: 1, databaseId: created.databaseId,
 });
 const albums = root.select(verified.databaseId);
@@ -165,8 +165,8 @@ schemas after checking compatibility.
 
 ## Existing filtered shares
 
-`social.createDatabase(name)` uses the original filtered Social format.
-`social.inviteReader(database, { name, nodeKey, contactPath })` grants reader
-access and returns a sealed invitation. Social reuses verified contacts, so
+`people.createDatabase(name)` uses the filtered `social` spec, version 1.
+`people.inviteReader(database, { name, nodeKey, contactPath })` grants reader
+access and returns a sealed invitation. People reuses verified contacts, so
 later reader invitations can omit `contactPath`. Use `sealInvitation` when the
 recipient already has a circle grant on a whole-database share.

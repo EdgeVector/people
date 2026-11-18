@@ -1,16 +1,19 @@
-# Social
+# People
 
-Social is the command-line address book and sharing settings for LastDB. It
-moved here from `EdgeVector/lastdb` (`apps/social`) on 2026-11-16.
+People is the command-line address book and sharing settings for LastDB. It
+moved out of `EdgeVector/lastdb` on 2026-11-16.
 
-- `src/social` is the entrypoint. `src/cli.py` holds the command grammar,
-  `src/commands.py` maps each command to an operation. Database and sharing
-  calls use `POST /v1/x/databases`. Record calls use `POST /v1/read` and
-  `POST /v1/write`.
+- `src/people` is the entrypoint, the file with no extension. `src/people.py`
+  is the contacts module. Python imports the `.py` file. `src/cli.py` holds
+  the command grammar, and `src/commands.py` maps each command to an
+  operation. Database and sharing calls use `POST /v1/x/databases`. Record
+  calls use `POST /v1/read` and `POST /v1/write`.
 - `ci/` holds the DEV sharing recipes run by `dev-sharing.yml`.
-- `lastdb-app.json` is the app manifest and the source of Social's private
-  schema definitions. The installer places those schemas. Social does not
-  declare them at run time. The `access` block names each exact schema.
+- `lastdb-app.json` is the app manifest and the source of People's private
+  schema definitions. Each schema object uses a local name such as `Person`.
+  The installer stores that name as `people/<Name>` from the manifest
+  `app_id`. People does not declare those schemas at run time. The `access`
+  block lists the nine full names for read and for write.
 - `setups/shared-albums-v1/` holds the schema definitions of the
   `shared-albums` version 1 setup. This is the only copy of the
   definitions. `EdgeVector/lastdb` keeps just the field names of the
@@ -22,19 +25,19 @@ moved here from `EdgeVector/lastdb` (`apps/social`) on 2026-11-16.
 
 - No tests. Pull requests get syntax, manifest and `--help` checks. The
   sharing flow is proven on main by `.github/workflows/dev-sharing.yml`
-  (`social-share`, `social-circles`, `social-scale`, `social-prepare`). It runs on every
+  (`people-share`, `people-circles`, `people-scale`, `people-prepare`). It runs on every
   push to main, daily at 09:23 UTC after the LastDB nightly, and by manual
   dispatch, never on a pull request. The recipes
   are in `ci/`. They start two fresh LastDB nodes from a published LastDB
-  nightly, connect them to the DEV cloud, and drive this commit's `social`
+  nightly, connect them to the DEV cloud, and drive this commit's `people`
   command through the launcher on the app socket. A step that sets up the
   node keeps the owner socket. A change that alters command output or behaviour must update
   the recipes in the same PR.
-- A registry listing is tied to one exact LastDB API version. `social-prepare`
-  fails when the DEV `next` list has no Social entry for the nightly's API
-  version: with `social_dev_listing_mismatch` when the list command falls back
+- A registry listing is tied to one exact LastDB API version. `people-prepare`
+  fails when the DEV `next` list has no People entry for the nightly's API
+  version: with `people_dev_listing_mismatch` when the list command falls back
   to an entry for an older API version, and with
-  `social_dev_listing_missing_for_api` when it finds none. The fix is to
+  `people_dev_listing_missing_for_api` when it finds none. The fix is to
   republish, not to change the recipe. `ci/publish_dev.py` does that by hand
   from a fresh node; its docstring has the command. It is not part of the
   workflow, and CI holds no publisher key.
@@ -44,13 +47,13 @@ moved here from `EdgeVector/lastdb` (`apps/social`) on 2026-11-16.
   binaries' CLI and socket, so fix them here when a LastDB release changes
   that behaviour. Two things still come from `EdgeVector/lastdb`:
   `lastdb_node/environments.json` (the endpoint profile of the build under
-  test) and the app SDK's data client, which `ci/social_sdk.mjs` uses to
+  test) and the app SDK's data client, which `ci/people_sdk.mjs` uses to
   read shared records. Both are taken at the nightly's source commit.
-- `client/` is `@lastdb/social-client`, the JavaScript wrapper around the
-  `social` command: plain ESM, no build step, no dependencies, types in
-  `index.d.ts`. It replaced the Social adapter that lived in
+- `client/` is `@lastdb/people-client`, the JavaScript wrapper around the
+  `people` command: plain ESM, no build step, no dependencies, types in
+  `index.d.ts`. It replaced the adapter that lived in
   `@lastdb/app-sdk`. When a command's name, flags or JSON output change,
-  change `client/` in the same commit; `ci/social_sdk.mjs` exercises it.
+  change `client/` in the same commit; `ci/people_sdk.mjs` exercises it.
   Keep `client/package.json`'s version equal to `lastdb-app.json`'s.
 - Preserve whole-database sharing: two logs, the signed per-database roster,
   schema write grants, and the publisher approving each mutation. Read

@@ -227,13 +227,13 @@ class OwnedNode:
                 return False
 
         poll_until(120, check_boot, interval=0.2, timeout_error=OperationError("daemon_start_deadline"))
-        self.place_social_schemas()
+        self.place_people_schemas()
 
-    def place_social_schemas(self):
+    def place_people_schemas(self):
         """Place each manifest schema on the owner socket, as the installer does.
 
         The declare route stores the name as `<app_id>/<local>`. Retention, if
-        a schema has it, sits beside `schema`. Social does not declare schemas.
+        a schema has it, sits beside `schema`. People does not declare schemas.
         """
         manifest_path = Path(__file__).resolve().parents[2] / "lastdb-app.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

@@ -1,4 +1,4 @@
-"""The `social NOUN VERB` command grammar."""
+"""The `people NOUN VERB` command grammar."""
 
 import argparse
 import os
@@ -13,8 +13,8 @@ APPLY = (
     flag("--apply", action="store_true", help="Make the change. Without it the command only previews"),
     flag("--token", help="With --apply, refuse unless the change still matches this preview"),
 )
-RESOLVE = flag("--resolve", action="append", metavar="DATABASE:PERSON=keep|social",
-               help="Keep a grant made outside Social as a direct grant, or apply Social's grant")
+RESOLVE = flag("--resolve", action="append", metavar="DATABASE:PERSON=keep|people",
+               help="Keep a grant made outside People as a direct grant, or apply People's grant")
 PERSON = flag("person", help="Saved contact name, or node key")
 DEFER = flag("--defer-conflicts", action="store_true",
              help="With --apply, leave a database with an unresolved outside grant pending for `db retry`")
@@ -86,14 +86,14 @@ COMMANDS = {
     "pick-database": ("List databases an app can use, or select one by ID", (
         flag("--spec", required=True), flag("--version", required=True, type=int),
         flag("--intent", required=True, choices=("read", "write")), flag("--database", help="Exact database ID"))),
-    "check": ("Report that the Social command started", ()),
+    "check": ("Report that the People command started", ()),
 }
 
 
 def parser():
     home = os.environ.get("LASTDB_HOME")
     command = argparse.ArgumentParser(
-        prog="social", description="Remember people and share databases from one LastDB home.")
+        prog="people", description="Remember people and share databases from one LastDB home.")
     command.add_argument("--data-dir", required=not home, default=home, type=Path)
     command.add_argument("--lastdb", type=Path, help="LastDB executable. Default: lastdb on PATH")
     command.add_argument("--json", action="store_true", help="Print JSON. This is the default when piped")

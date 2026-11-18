@@ -1,6 +1,6 @@
 name: ci-required
 
-# Gate of record for EdgeVector/social. CI runs no tests (Tom, 2026-10-09).
+# Gate of record for EdgeVector/people. CI runs no tests (Tom, 2026-10-09).
 # `check` covers syntax, the manifest and the command grammar. The sharing
 # flow itself is proven on main by .github/workflows/dev-sharing.yml.
 # The final job `ci-required` is the protected status name. Keep it verbatim.
@@ -26,14 +26,14 @@ jobs:
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
         run: |
-          python3 -m py_compile src/*.py src/social ci/*.py ci/lib/*.py
-          node --check ci/social_sdk.mjs
+          python3 -m py_compile src/*.py src/people ci/*.py ci/lib/*.py
+          node --check ci/people_sdk.mjs
           node --check client/index.mjs
       - name: Manifest and setup definitions
         run: |
           set -euo pipefail
           for file in lastdb-app.json client/package.json setups/*/*.json; do python3 -m json.tool "$file" > /dev/null; done
-          # The client ships with Social, so the two carry one version.
+          # The client ships with People, so the two carry one version.
           version() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["version"])' "$1"; }
           test "$(version client/package.json)" = "$(version lastdb-app.json)"
           entrypoint="$(python3 -c 'import json; print(json.load(open("lastdb-app.json"))["run"]["entrypoint"])')"
@@ -41,8 +41,8 @@ jobs:
       - name: Command grammar
         run: |
           set -euo pipefail
-          python3 -B src/social --help > /dev/null
-          for noun in person circle db grant request; do python3 -B src/social "$noun" --help > /dev/null; done
+          python3 -B src/people --help > /dev/null
+          for noun in person circle db grant request; do python3 -B src/people "$noun" --help > /dev/null; done
 
   diff_file_size:
     name: Changed-file size lint

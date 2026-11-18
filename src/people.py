@@ -1,4 +1,4 @@
-"""Private Social contacts stored as keyed Person records."""
+"""Private People contacts stored as keyed Person records."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 
-from lastdb import LastDBError, SocialError, record_mutation
+from lastdb import LastDBError, PeopleError, record_mutation
 
 
-PERSON_SCHEMA = "social-graph/Person"
-ADDRESS_BOOK = "social-graph/AddressBookEntry"
+PERSON_SCHEMA = "people/Person"
+ADDRESS_BOOK = "people/AddressBookEntry"
 BOOK_HASH = "contacts"
 
 
@@ -27,7 +27,7 @@ class People:
                 "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
             if fields["node_key"] != node_key:
-                raise SocialError("stored contact has a different node key")
+                raise PeopleError("stored contact has a different node key")
             if fields.get("display_name") == display_name and fields.get("contact_code") == contact_code:
                 self.index(person_id)
                 return fields
@@ -40,7 +40,7 @@ class People:
             else:
                 self.index(person_id)
                 return fields
-        raise SocialError("contact changed concurrently; retry the operation")
+        raise PeopleError("contact changed concurrently; retry the operation")
 
     def remove(self, node_key):
         """Delete the contact and its address book entry in one write."""
@@ -53,7 +53,7 @@ class People:
         person = person_page["records"][:1]
         entry = entry_page["records"][:1]
         if not person:
-            raise SocialError("this person is not in the address book")
+            raise PeopleError("this person is not in the address book")
         removals = [record_mutation(PERSON_SCHEMA, person_id, None, person[0])]
         if entry:
             removals.append(record_mutation(ADDRESS_BOOK, entry_key, None, entry[0]))
@@ -86,7 +86,7 @@ class People:
             page = self.node.read_range(ADDRESS_BOOK, BOOK_HASH, limit=64, cursor=cursor, keys_only=True)
             keys = [key.get("range") if isinstance(key, dict) else None for key in page["keys"]]
             if any(not key for key in keys):
-                raise SocialError("LastDB returned an address book key without a person")
+                raise PeopleError("LastDB returned an address book key without a person")
             if keys:
                 result.extend(self.read_batch(keys))
             cursor = page["next_cursor"]

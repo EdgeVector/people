@@ -1,12 +1,12 @@
 name: DEV sharing
 
-# Real sharing checks for Social. Each mode starts two fresh LastDB nodes on
+# Real sharing checks for People. Each mode starts two fresh LastDB nodes on
 # the runner (a publisher and a recipient), connects them to the DEV cloud, and
-# drives this commit's `social` command through a published LastDB nightly.
+# drives this commit's `people` command through a published LastDB nightly.
 # The recipes are in ci/ and their node helpers in ci/lib/. A checkout of
 # EdgeVector/lastdb at the nightly's exact source commit supplies the compiled
 # endpoint profile, lastdb_node/environments.json, and the app SDK's data
-# client for reading shared records. The Social client under test is client/.
+# client for reading shared records. The People client under test is client/.
 #
 # Cloud steps run only on main. A pull request gets the syntax job and never
 # receives cloud credentials.
@@ -24,15 +24,15 @@ on:
       mode:
         description: "Which check to run"
         type: choice
-        options: [all, social-share, social-circles, social-scale, social-prepare]
+        options: [all, people-share, people-circles, people-scale, people-prepare]
         default: all
       lastdb_release:
         description: "LastDB nightly tag, for example nightly-20261116-3484b912b. Empty selects the newest published nightly"
         type: string
-      social_install_revision:
-        description: "For a sharing mode, optionally install this exact signed Social source from the registry"
+      people_install_revision:
+        description: "For a sharing mode, optionally install this exact signed People source from the registry"
         type: string
-      social_install_registry:
+      people_install_registry:
         description: "Signed catalog for the exact install. Sharing operations still use the DEV cloud"
         type: choice
         options: [dev, prod]
@@ -67,7 +67,7 @@ jobs:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
         run: |
           python3 -m py_compile ci/*.py ci/lib/*.py
-          node --check ci/social_sdk.mjs
+          node --check ci/people_sdk.mjs
       - name: Select the modes
         id: modes
         env:
@@ -75,8 +75,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$MODE" in
-            all) modes='["social-share","social-circles","social-scale","social-prepare"]' ;;
-            social-share|social-circles|social-scale|social-prepare) modes="[\"$MODE\"]" ;;
+            all) modes='["people-share","people-circles","people-scale","people-prepare"]' ;;
+            people-share|people-circles|people-scale|people-prepare) modes="[\"$MODE\"]" ;;
             *) exit 2 ;;
           esac
           printf 'modes=%s\n' "$modes" >> "$GITHUB_OUTPUT"
@@ -149,7 +149,7 @@ jobs:
           {
             printf 'LastDB nightly: `%s` (`%s`)\n\n' "$tag" "$version"
             printf 'LastDB source: `%s`\n\n' "$source"
-            printf 'Social source: `%s`\n' "$GITHUB_SHA"
+            printf 'People source: `%s`\n' "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Check out LastDB at the nightly's source commit
         env:
@@ -166,10 +166,10 @@ jobs:
           test -f "$source/lastdb_node/environments.json"
           printf 'LASTDB_SOURCE=%s\n' "$source" >> "$GITHUB_ENV"
       - name: Build the LastDB app SDK for content reads
-        if: matrix.mode != 'social-prepare'
+        if: matrix.mode != 'people-prepare'
         run: |
           set -euo pipefail
-          # ci/social_sdk.mjs uses this repo's Social client. It needs the LastDB
+          # ci/people_sdk.mjs uses this repo's People client. It needs the LastDB
           # data client only to read shared records, so build that from the
           # source of the build under test.
           cd "$LASTDB_SOURCE/lastdb_app_sdk"
@@ -181,24 +181,24 @@ jobs:
           test -f "$RUNNER_TEMP/lastdb-app-sdk/package/dist/index.js"
           printf 'LASTDB_APP_SDK=%s/lastdb-app-sdk/package\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Install the signed log read tool dependency
-        if: matrix.mode == 'social-circles'
+        if: matrix.mode == 'people-circles'
         run: python3 -m pip install --quiet cryptography==41.0.7
       - name: Run the DEV check
         env:
           OPERATION: ${{ matrix.mode }}
           # Keep bytecode out of both checkouts. Publishing reads a clean checkout.
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
-          SOCIAL_INSTALL_REVISION: ${{ inputs.social_install_revision }}
-          SOCIAL_INSTALL_REGISTRY: ${{ inputs.social_install_registry }}
-          LASTDB_CLOUD_DEV_API_KEY: ${{ matrix.mode != 'social-prepare' && secrets.LASTDB_CLOUD_DEV_API_KEY || '' }}
-          LASTDB_CLOUD_DEV_RECOVERY_PHRASE: ${{ matrix.mode != 'social-prepare' && secrets.LASTDB_CLOUD_DEV_RECOVERY_PHRASE || '' }}
+          PEOPLE_INSTALL_REVISION: ${{ inputs.people_install_revision }}
+          PEOPLE_INSTALL_REGISTRY: ${{ inputs.people_install_registry }}
+          LASTDB_CLOUD_DEV_API_KEY: ${{ matrix.mode != 'people-prepare' && secrets.LASTDB_CLOUD_DEV_API_KEY || '' }}
+          LASTDB_CLOUD_DEV_RECOVERY_PHRASE: ${{ matrix.mode != 'people-prepare' && secrets.LASTDB_CLOUD_DEV_RECOVERY_PHRASE || '' }}
         run: |
           set -euo pipefail
           case "$OPERATION" in
-            social-share) recipe=social_share ;;
-            social-circles) recipe=social_circles ;;
-            social-scale) recipe=social_scale ;;
-            social-prepare) recipe=social_prepare ;;
+            people-share) recipe=people_share ;;
+            people-circles) recipe=people_circles ;;
+            people-scale) recipe=people_scale ;;
+            people-prepare) recipe=people_prepare ;;
             *) exit 2 ;;
           esac
           export PYTHONPATH="$GITHUB_WORKSPACE/ci/lib"

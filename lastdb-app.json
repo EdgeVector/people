@@ -1,19 +1,19 @@
 {
-  "app_id": "social-graph",
-  "version": "0.12.0",
-  "source": "https://github.com/EdgeVector/social.git",
+  "app_id": "people",
+  "version": "1.0.0",
+  "source": "https://github.com/EdgeVector/people.git",
   "audience": "public",
   "metadata": {
-    "display_name": "Social",
+    "display_name": "People",
     "description": "Manage people and shared databases on a local LastDB node.",
-    "homepage_url": "https://github.com/EdgeVector/social"
+    "homepage_url": "https://github.com/EdgeVector/people"
   },
   "contract_surfaces": [
     "http"
   ],
   "run": {
     "runtime": "command",
-    "entrypoint": "src/social"
+    "entrypoint": "src/people"
   },
   "schemas": [
     {
@@ -51,12 +51,12 @@
         "avatar": "Inline thumbnail.",
         "added_at": "When this person was added, RFC 3339."
       },
-      "owner_app_id": "social-graph"
+      "owner_app_id": "people"
     },
     {
       "name": "AddressBookEntry",
       "descriptive_name": "Address Book Entry",
-      "purpose_statement": "A keyed reference to a verified Social contact.",
+      "purpose_statement": "A keyed reference to a verified contact.",
       "schema_type": "HashRange",
       "record_keys": {
         "primary": {
@@ -72,14 +72,14 @@
         "person_id": "String"
       },
       "field_descriptions": {
-        "person_id": "Primary key of the private Social Person record."
+        "person_id": "Primary key of the private Person record."
       },
-      "owner_app_id": "social-graph"
+      "owner_app_id": "people"
     },
     {
       "name": "SharingUpdate",
       "descriptive_name": "Sharing Update",
-      "purpose_statement": "The last pending Social sharing update for one database.",
+      "purpose_statement": "The last pending People sharing update for one database.",
       "schema_type": "Hash",
       "record_keys": {
         "primary": {
@@ -96,7 +96,7 @@
       "field_descriptions": {
         "request": "The exact pending revision and member configuration."
       },
-      "owner_app_id": "social-graph"
+      "owner_app_id": "people"
     },
     {
       "name": "Circle",
@@ -128,7 +128,7 @@
         "members": "Node keys of the verified contacts in this circle.",
         "links": "Write scope of this circle on each linked database."
       },
-      "owner_app_id": "social-graph"
+      "owner_app_id": "people"
     },
     {
       "name": "DatabaseUpdate",
@@ -157,12 +157,12 @@
         "pending": "Whether a circle update for this database is unfinished.",
         "operation": "The latest approved sharing operation on this database and its outcome."
       },
-      "owner_app_id": "social-graph"
+      "owner_app_id": "people"
     },
     {
       "name": "CirclePolicy",
       "descriptive_name": "Circle policy",
-      "purpose_statement": "Social circles granting access to one named database.",
+      "purpose_statement": "People circles granting access to one named database.",
       "schema_type": "Hash",
       "record_keys": {
         "primary": {
@@ -179,7 +179,7 @@
       "field_descriptions": {
         "circles": "The circle names, member identities and schema write scopes."
       },
-      "owner_app_id": "social-graph"
+      "owner_app_id": "people"
     },
     {
       "name": "SharingRequest",
@@ -201,7 +201,7 @@
       "field_descriptions": {
         "request": "The exact app declaration and its sharing outcome."
       },
-      "owner_app_id": "social-graph"
+      "owner_app_id": "people"
     },
     {
       "name": "PendingSharingRequest",
@@ -230,12 +230,12 @@
         "app_id": "Label of the app that proposed the sharing request.",
         "database_id": "Stable identifier of the database in the proposal."
       },
-      "owner_app_id": "social-graph"
+      "owner_app_id": "people"
     },
     {
       "name": "DatabaseSetup",
       "descriptive_name": "Database setup",
-      "purpose_statement": "Progress for a database provisioned from a named Social setup.",
+      "purpose_statement": "Progress for a database provisioned from a named People setup.",
       "schema_type": "Hash",
       "record_keys": {
         "primary": {
@@ -253,41 +253,41 @@
       },
       "field_descriptions": {
         "database_id": "Stable ID of the database chosen for this setup.",
-        "ready": "Whether Social confirmed the complete schema setup."
+        "ready": "Whether People confirmed the complete schema setup."
       },
-      "owner_app_id": "social-graph"
+      "owner_app_id": "people"
     }
   ],
   "access": {
     "read": [
-      "social-graph/Person",
-      "social-graph/AddressBookEntry",
-      "social-graph/SharingUpdate",
-      "social-graph/Circle",
-      "social-graph/DatabaseUpdate",
-      "social-graph/CirclePolicy",
-      "social-graph/SharingRequest",
-      "social-graph/PendingSharingRequest",
-      "social-graph/DatabaseSetup"
+      "people/Person",
+      "people/AddressBookEntry",
+      "people/SharingUpdate",
+      "people/Circle",
+      "people/DatabaseUpdate",
+      "people/CirclePolicy",
+      "people/SharingRequest",
+      "people/PendingSharingRequest",
+      "people/DatabaseSetup"
     ],
     "write": [
-      "social-graph/Person",
-      "social-graph/AddressBookEntry",
-      "social-graph/SharingUpdate",
-      "social-graph/Circle",
-      "social-graph/DatabaseUpdate",
-      "social-graph/CirclePolicy",
-      "social-graph/SharingRequest",
-      "social-graph/PendingSharingRequest",
-      "social-graph/DatabaseSetup"
+      "people/Person",
+      "people/AddressBookEntry",
+      "people/SharingUpdate",
+      "people/Circle",
+      "people/DatabaseUpdate",
+      "people/CirclePolicy",
+      "people/SharingRequest",
+      "people/PendingSharingRequest",
+      "people/DatabaseSetup"
     ],
     "extensions": ["databases"]
   },
   "install": {
     "links": [
       {
-        "source": "src/social",
-        "command": "social"
+        "source": "src/people",
+        "command": "people"
       }
     ],
     "probe": [
@@ -295,7 +295,7 @@
         "argv": [
           "python3",
           "-B",
-          "src/social",
+          "src/people",
           "check"
         ],
         "timeout_s": 15

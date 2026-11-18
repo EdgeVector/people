@@ -1,4 +1,4 @@
-"""Publish app-declared sharing through the owner's Social commands in the signed DEV operation."""
+"""Publish app-declared sharing through the owner's People commands in the signed DEV operation."""
 
 from contextlib import closing
 import json
@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from node import Connection
-from social_app import sdk, social
+from people_app import sdk, people
 from support import decode_json, require, summary
 
 
@@ -34,11 +34,11 @@ def configure_bindings(publisher, circle, first, second, scopes):
     for request_id in requests:
         require(sdk(publisher, "sharing-status", requestId=request_id)["revision"] == "0",
                 "app_request_confirmed_empty_circle")
-    require(not social(publisher, "request", "list")["requests"], "app_confirmed_requests_leave_list")
-    links = next(row["links"] for row in social(publisher, "circle", "list") if row["id"] == circle["id"])
+    require(not people(publisher, "request", "list")["requests"], "app_confirmed_requests_leave_list")
+    links = next(row["links"] for row in people(publisher, "circle", "list") if row["id"] == circle["id"])
     require(links == {first: sorted(scopes), second: []}, "app_declarations_saved")
     summary("Two app callers proposed independent bindings through the packaged SDK. The owner approved "
-            "both and their confirmed status survived a new Social process.")
+            "both and their confirmed status survived a new People process.")
     return links
 
 
@@ -48,21 +48,21 @@ def decline_binding(publisher, circle, database):
     declaration = propose(publisher, "photo-journal", change)
     request_id = declaration["requestId"]
     before = roster(publisher, database)
-    pending = social(publisher, "request", "list")
+    pending = people(publisher, "request", "list")
     names = {row["requestId"]: (row["appId"], row["databaseId"]) for row in pending["requests"]}
     require(names == {request_id: ("photo-journal", database)} and pending["nextCursor"] is None,
             "app_request_found_on_regular_open")
     preview = preview_request(publisher, request_id)
-    declined = social(publisher, "request", "decline", request_id)
+    declined = people(publisher, "request", "decline", request_id)
     require(declined["status"] == "declined", "app_owner_declined")
     require(approve(publisher, request_id, preview) == declined, "app_decline_cannot_be_approved")
-    require(not social(publisher, "request", "list")["requests"], "app_declined_request_leaves_list")
-    require(social(publisher, "request", "decline", request_id) == declined,
+    require(not people(publisher, "request", "list")["requests"], "app_declined_request_leaves_list")
+    require(people(publisher, "request", "decline", request_id) == declined,
             "app_decline_idempotent_after_reopen")
     status = sdk(publisher, "sharing-status", requestId=request_id)
     require(status["status"] == "declined" and sdk(publisher, "request-sharing", **declaration) == status
             and roster(publisher, database) == before, "app_decline_returned_through_sdk")
-    summary("The owner found a proposal with `social request list` and declined it. It left the list, and its "
+    summary("The owner found a proposal with `people request list` and declined it. It left the list, and its "
             "terminal status survived a repeated decline, a repeated request, and an old approval preview "
             "without changing the roster.")
 
@@ -77,17 +77,17 @@ def propose(publisher, app, change):
 
 
 def resolutions(review):
-    """Write `{database: {person: choice}}` as the --resolve flags of a Social command."""
+    """Write `{database: {person: choice}}` as the --resolve flags of a People command."""
     return [flag for database, people in (review or {}).items() for person, choice in people.items()
             for flag in ("--resolve", f"{database}:{person}={choice}")]
 
 
 def preview_request(owner, request_id, review=None):
-    return social(owner, "request", "show", request_id, *resolutions(review))
+    return people(owner, "request", "show", request_id, *resolutions(review))
 
 
 def approve(owner, request_id, preview, review=None, refusal=None):
-    return social(owner, "request", "approve", request_id, "--token", preview["token"], *resolutions(review),
+    return people(owner, "request", "approve", request_id, "--token", preview["token"], *resolutions(review),
                   refusal=refusal)
 
 
@@ -118,7 +118,7 @@ def external_changes(publisher, circle, database, reader, schema):
     request_id = propose(publisher, "photo-journal", change)["requestId"]
     result = approve(publisher, request_id, preview_request(publisher, request_id))
     require(result["status"] == "confirmed" and int(result["revision"]) > int(current["revision"]) + 1,
-            "unrelated_owner_grant_keeps_social_applicable")
+            "unrelated_owner_grant_keeps_people_applicable")
     current = roster(publisher, database)
     require(separate in current["members"], "external_grant_preserved")
     outside = {"nodeKey": reader, "state": "active", "role": "submit", "writeSchemas": {"names": [schema]}}
@@ -128,7 +128,7 @@ def external_changes(publisher, circle, database, reader, schema):
     conflict = review["databases"][0]["conflicts"]
     require(len(conflict) == 1 and conflict[0]["nodeKey"] == reader
             and conflict[0]["current"]["writeSchemas"] == outside["writeSchemas"], "outside_scope_requires_review")
-    approve(publisher, request_id, review, refusal=b"grants changed outside Social")
+    approve(publisher, request_id, review, refusal=b"grants changed outside People")
     require(outside in roster(publisher, database)["members"], "outside_scope_preserved_before_review")
     choices = {database: {reader: "keep"}}
     preview = preview_request(publisher, request_id, choices)
@@ -166,17 +166,17 @@ def independent_update(publisher, circle_id, first, second, reader, schema):
     ])
     first_before = roster(publisher, first)
     edit = ("circle", "set", circle_id, "--link", f"{first}={schema}")
-    preview = social(publisher, *edit)
+    preview = people(publisher, *edit)
     require(preview["databases"][0]["conflicts"][0]["nodeKey"] == reader,
             "app_overlapping_owner_edit_needs_review")
-    social(publisher, *edit, "--apply", "--token", preview["token"], refusal=b"grants changed outside Social")
-    pending = social(publisher, *edit, "--apply", "--token", preview["token"], "--defer-conflicts")
+    people(publisher, *edit, "--apply", "--token", preview["token"], refusal=b"grants changed outside People")
+    pending = people(publisher, *edit, "--apply", "--token", preview["token"], "--defer-conflicts")
     require(pending["pending"] == [first], "app_first_database_pending")
     overlap = propose(publisher, "photo-journal", {
         "operation": "setCircleBinding", "databaseId": first, "circleId": circle_id, "preset": "viewer",
     })
-    social(publisher, "request", "show", overlap["requestId"], refusal=b"finish the pending sharing update")
-    social(publisher, "request", "decline", overlap["requestId"])
+    people(publisher, "request", "show", overlap["requestId"], refusal=b"finish the pending sharing update")
+    people(publisher, "request", "decline", overlap["requestId"])
 
     request_id = propose(publisher, "album-viewer", {
         "operation": "restorePerson", "databaseId": second, "nodeKey": reader, "preset": "viewer",
@@ -184,10 +184,10 @@ def independent_update(publisher, circle_id, first, second, reader, schema):
     result = approve(publisher, request_id, preview_request(publisher, request_id))
     active = next(row for row in roster(publisher, second)["members"] if row["nodeKey"] == reader)
     require(result["status"] == "confirmed" and active["state"] == "active"
-            and social(publisher, "circle", "show", circle_id)["pending"] == [first]
+            and people(publisher, "circle", "show", circle_id)["pending"] == [first]
             and roster(publisher, first) == first_before, "app_second_database_confirmed_while_first_pending")
 
-    result = social(publisher, "db", "retry", first, "--resolve", f"{first}:{reader}=keep")
+    result = people(publisher, "db", "retry", first, "--resolve", f"{first}:{reader}=keep")
     require(not result["pending"] and roster(publisher, first) == first_before
             and sdk(publisher, "sharing-status", requestId=request_id)["status"] == "confirmed",
             "app_first_database_finished_without_disturbing_second")

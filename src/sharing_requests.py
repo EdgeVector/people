@@ -1,4 +1,4 @@
-"""Accept app sharing declarations and hand approval to the Social owner UI."""
+"""Accept app sharing declarations and hand approval to the People owner UI."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ import json
 import re
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from lastdb import LastDBError, SocialError, record_mutation
+from lastdb import LastDBError, PeopleError, record_mutation
 from circles import DIGEST
 from request_index import RequestIndex
 from reusable_circles import confirm, encoded
 
 
-SCHEMA = "social-graph/SharingRequest"
+SCHEMA = "people/SharingRequest"
 # An owner's own change has no saved proposal. Its ID comes from the change,
 # so a preview and its apply agree.
-OWNER_CHANGES = uuid5(NAMESPACE_URL, "social-graph/owner-change")
+OWNER_CHANGES = uuid5(NAMESPACE_URL, "people/owner-change")
 APP_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}\Z")
 PRESETS = {
     "viewer": [],
@@ -32,7 +32,7 @@ def uuid_key(value):
                 return value
         except ValueError:
             pass
-    raise SocialError("use a canonical UUID for the sharing request and its selections")
+    raise PeopleError("use a canonical UUID for the sharing request and its selections")
 
 
 class SharingRequests:
@@ -48,13 +48,13 @@ class SharingRequests:
 
     def submit(self, args):
         if args.keys() != {"requestId", "appId", "change"}:
-            raise SocialError("provide a request ID, an app ID, and a sharing change")
+            raise PeopleError("provide a request ID, an app ID, and a sharing change")
         request_id, app = uuid_key(args["requestId"]), args["appId"]
         if not isinstance(app, str) or not APP_ID.fullmatch(app):
-            raise SocialError("enter the proposing app's identifier")
+            raise PeopleError("enter the proposing app's identifier")
         change = args["change"]
         if not isinstance(change, dict):
-            raise SocialError("provide a sharing declaration")
+            raise PeopleError("provide a sharing declaration")
         change = parse_change(change)
         database, circle = change["databaseId"], change.get("circleId")
         declaration = {"requestId": request_id, "appId": app, "change": change}
@@ -62,7 +62,7 @@ class SharingRequests:
         if previous:
             return self.replay(declaration, prior)
         if (circle and not any(row["id"] == circle for row in self.circles())) or database not in self.reusable.owned():
-            raise SocialError("select an existing circle and an owned whole-database share")
+            raise PeopleError("select an existing circle and an owned whole-database share")
         try:
             self.save(request_id, {"declaration": declaration}, None, self.index.add(declaration))
         except LastDBError as error:
@@ -74,7 +74,7 @@ class SharingRequests:
 
     def replay(self, declaration, prior):
         if not prior or prior["declaration"] != declaration:
-            raise SocialError("this request ID belongs to a different declaration")
+            raise PeopleError("this request ID belongs to a different declaration")
         return self.status(declaration["requestId"])
 
     def load(self, request_id):
@@ -89,7 +89,7 @@ class SharingRequests:
     def status(self, request_id):
         _, data = self.load(request_id)
         if data is None:
-            raise SocialError("sharing request does not exist")
+            raise PeopleError("sharing request does not exist")
         declaration = data["declaration"]
         if "receipt" in data:
             return status(declaration, data["receipt"])
@@ -135,7 +135,7 @@ class SharingRequests:
     def review(self, request_id, review, token=None):
         _, data = self.load(request_id)
         if not data:
-            raise SocialError("sharing request does not exist")
+            raise PeopleError("sharing request does not exist")
         request = data["declaration"]
         directory = self.reusable.load()
         active = directory.operations.get(request["change"]["databaseId"])
@@ -154,7 +154,7 @@ class SharingRequests:
         with self.reusable.circles.lock():
             record, data = self.load(request_id)
             if data is None:
-                raise SocialError("sharing request does not exist")
+                raise PeopleError("sharing request does not exist")
             request = data["declaration"]
             receipt = data.get("receipt")
             if receipt and receipt["status"] == "declined":
@@ -162,7 +162,7 @@ class SharingRequests:
             directory = self.reusable.load()
             active = directory.operations.get(request["change"]["databaseId"])
             if receipt or (active and active["requestId"] == request_id):
-                raise SocialError("only requests awaiting approval can be declined")
+                raise PeopleError("only requests awaiting approval can be declined")
             receipt = {"status": "declined"}
             self.save(request_id, {**data, "receipt": receipt}, record, self.index.remove(request_id))
             return status(request, receipt)
@@ -176,11 +176,11 @@ class SharingRequests:
             node = change["nodeKey"]
             people = self.reusable.circles.people.by_keys([node])
             if node not in people:
-                raise SocialError("save this person's verified contact before sharing")
+                raise PeopleError("save this person's verified contact before sharing")
             return edit, {**operation, "direct": change}, people[node]["display_name"]
         circle = next((row for row in directory.circles if row["id"] == change["circleId"]), None)
         if not circle:
-            raise SocialError("the circle no longer exists")
+            raise PeopleError("the circle no longer exists")
         links = dict(circle["links"])
         if change["operation"] == "setCircleBinding":
             links[database] = change["writeSchemas"]
@@ -204,15 +204,15 @@ def parse_change(change):
     elif operation in ("setPersonGrant", "revokePerson", "restorePerson"):
         node = change["nodeKey"]
         if not isinstance(node, str) or not DIGEST.fullmatch(node):
-            raise SocialError("choose a verified person")
+            raise PeopleError("choose a verified person")
         target = {"nodeKey": node}
     else:
-        raise SocialError("choose a sharing declaration operation")
+        raise PeopleError("choose a sharing declaration operation")
     result = {"operation": operation, "databaseId": database, **target}
     if operation in ("setCircleBinding", "setPersonGrant", "restorePerson"):
         return {**result, "writeSchemas": parse_scope(change, result.keys())}
     if change.keys() != result.keys():
-        raise SocialError("remove a circle or revoke a person without a write scope")
+        raise PeopleError("remove a circle or revoke a person without a write scope")
     return result
 
 
@@ -220,14 +220,14 @@ def parse_scope(change, fields):
     if change.keys() == fields | {"preset"}:
         if isinstance(change["preset"], str) and change["preset"] in PRESETS:
             return PRESETS[change["preset"]]
-        raise SocialError("choose Viewer, Commenter, or Album organizer")
+        raise PeopleError("choose Viewer, Commenter, or Album organizer")
     scope = change.get("writeSchemas")
     if change.keys() != fields | {"writeSchemas"}:
-        raise SocialError("choose one write preset or a list of installed schema names")
+        raise PeopleError("choose one write preset or a list of installed schema names")
     if scope == "all":
         return scope
     if not isinstance(scope, list) or any(not isinstance(name, str) for name in scope):
-        raise SocialError("choose installed schema names")
+        raise PeopleError("choose installed schema names")
     return sorted(set(scope))
 
 

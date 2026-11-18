@@ -1,24 +1,24 @@
-/** Use the same LastDB home for Social and the content client. */
-export interface SocialClientOptions {
+/** Use the same LastDB home for People and the content client. */
+export interface PeopleClientOptions {
   dataDir: string;
-  /** Installed Social command or explicit executable path. Defaults to `social`. */
-  socialPath?: string;
+  /** Installed People command or explicit executable path. Defaults to `people`. */
+  peoplePath?: string;
   /** LastDB executable to use when it is outside the caller's PATH. */
   lastdbPath?: string;
 }
 
-/** A failed Social command or output of the wrong shape. */
-export class SocialError extends Error {
-  constructor(code: SocialError['code'], message: string);
+/** A failed People command or output of the wrong shape. */
+export class PeopleError extends Error {
+  constructor(code: PeopleError['code'], message: string);
   code: 'command_failed' | 'invalid_response';
 }
 
 /**
- * The database row Social prints: LastDB's own row, returned as given.
+ * The database row People prints: LastDB's own row, returned as given.
  * Name `id` as `database` on each LastDB read and write item. LastDB limits
  * the app by the schemas it declared, not by database.
  */
-export interface SocialDatabase {
+export interface PeopleDatabase {
   /** Stable database id for the `database` field of `POST /v1/read` and `POST /v1/write`. */
   id: string;
   name?: string | null;
@@ -30,7 +30,7 @@ export interface SocialDatabase {
 }
 
 /** A sealed invitation for the caller to hand to the verified recipient. */
-export interface SocialInvitation {
+export interface PeopleInvitation {
   databaseId: string;
   revision: string;
   publisher: string;
@@ -38,7 +38,7 @@ export interface SocialInvitation {
 }
 
 /** Provision by a new local name or verify an explicitly selected database. */
-export type SocialSetupRequest = {
+export type PeopleSetupRequest = {
   setupName: string;
   requiredVersion?: number;
 } & (
@@ -46,7 +46,7 @@ export type SocialSetupRequest = {
   | { databaseId: string; localName?: never; finishExisting?: true }
 );
 
-export interface SocialDatabaseSetup {
+export interface PeopleDatabaseSetup {
   databaseId: string;
   name: string | null;
   setupName: string;
@@ -55,24 +55,24 @@ export interface SocialDatabaseSetup {
   definitions: Record<string, string>;
 }
 
-type SocialGrantScope =
+type PeopleGrantScope =
   { writeSchemas: string[] | 'all'; preset?: never }
   | { preset: 'viewer' | 'commenter' | 'album-organizer'; writeSchemas?: never };
 
-export type SocialSharingChange =
-  | ({ operation: 'setCircleBinding'; databaseId: string; circleId: string } & SocialGrantScope)
+export type PeopleSharingChange =
+  | ({ operation: 'setCircleBinding'; databaseId: string; circleId: string } & PeopleGrantScope)
   | { operation: 'removeCircleBinding'; databaseId: string; circleId: string }
-  | ({ operation: 'setPersonGrant' | 'restorePerson'; databaseId: string; nodeKey: string } & SocialGrantScope)
+  | ({ operation: 'setPersonGrant' | 'restorePerson'; databaseId: string; nodeKey: string } & PeopleGrantScope)
   | { operation: 'revokePerson'; databaseId: string; nodeKey: string };
 
-export interface SocialSharingRequest {
+export interface PeopleSharingRequest {
   requestId: string;
   /** Display label for the app that proposed the change. */
   appId: string;
-  change: SocialSharingChange;
+  change: PeopleSharingChange;
 }
 
-export interface SocialSharingStatus {
+export interface PeopleSharingStatus {
   requestId: string;
   databaseId: string;
   status: 'awaitingApproval' | 'pending' | 'confirmed' | 'needsReview' | 'declined';
@@ -80,32 +80,32 @@ export interface SocialSharingStatus {
   error?: string;
 }
 
-export interface SocialClient {
+export interface PeopleClient {
   /** List the owner's reusable circle labels and stable IDs. */
   listCircles(): Promise<{ id: string; name: string }[]>;
-  /** Save a declaration for the owner to approve with `social request approve`. Retry with the same UUID and change. */
-  requestSharing(request: SocialSharingRequest): Promise<SocialSharingStatus>;
+  /** Save a declaration for the owner to approve with `people request approve`. Retry with the same UUID and change. */
+  requestSharing(request: PeopleSharingRequest): Promise<PeopleSharingStatus>;
   /** Read the outcome using the UUID assigned when the app proposed the change. */
-  getSharingStatus(requestId: string): Promise<SocialSharingStatus>;
-  /** Create a named database using Social's original filtered sharing format. */
-  createDatabase(name: string): Promise<SocialDatabase>;
+  getSharingStatus(requestId: string): Promise<PeopleSharingStatus>;
+  /** Create a named database on the filtered `social` spec, version 1. */
+  createDatabase(name: string): Promise<PeopleDatabase>;
   /** Create an empty named whole-database share for an app's own schemas. */
-  createSharedDatabase(name: string): Promise<SocialDatabase>;
-  /** Open a versioned database setup using Social's catalog. */
-  setupDatabase(request: SocialSetupRequest): Promise<SocialDatabaseSetup>;
-  /** Omit contactPath when Social already remembers the verified recipient. */
+  createSharedDatabase(name: string): Promise<PeopleDatabase>;
+  /** Open a versioned database setup using People's catalog. */
+  setupDatabase(request: PeopleSetupRequest): Promise<PeopleDatabaseSetup>;
+  /** Omit contactPath when People already remembers the verified recipient. */
   inviteReader(database: string, recipient: {
     name: string;
     nodeKey: string;
     contactPath?: string;
-  }): Promise<SocialInvitation>;
+  }): Promise<PeopleInvitation>;
   /** Seal an invitation for a verified contact with an existing whole-database grant. */
-  sealInvitation(databaseId: string, nodeKey: string): Promise<SocialInvitation>;
+  sealInvitation(databaseId: string, nodeKey: string): Promise<PeopleInvitation>;
   /** Accept using the independently verified publisher key. */
-  acceptInvitation(invitation: SocialInvitation, publisherKey: string, name?: string): Promise<SocialDatabase>;
+  acceptInvitation(invitation: PeopleInvitation, publisherKey: string, name?: string): Promise<PeopleDatabase>;
   /** Revoke a person's grant and return the applied revision. */
   revokeAccess(database: string, nodeKey: string): Promise<string>;
 }
 
-/** Share with people through Social. Use `connect` from `@lastdb/app-sdk` for content. */
-export function socialClient(options: SocialClientOptions): SocialClient;
+/** Share contacts and databases through People. Use `connect` from `@lastdb/app-sdk` for content. */
+export function peopleClient(options: PeopleClientOptions): PeopleClient;

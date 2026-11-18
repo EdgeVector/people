@@ -1,4 +1,4 @@
-"""Read a disposable Social database from ExeMem as its two DEV participants."""
+"""Read a disposable People database from ExeMem as its two DEV participants."""
 
 from concurrent.futures import ThreadPoolExecutor
 import json

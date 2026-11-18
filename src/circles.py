@@ -7,21 +7,21 @@ import fcntl
 import json
 import re
 
-from lastdb import SocialError
+from lastdb import PeopleError
 
 
-SCHEMA = "social-graph/CirclePolicy"
+SCHEMA = "people/CirclePolicy"
 FULL = "all"
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
-class GrantReview(SocialError):
+class GrantReview(PeopleError):
     def __init__(self, changes):
-        super().__init__("Review grants changed outside Social before updating this database.")
+        super().__init__("Review grants changed outside People before updating this database.")
         self.changes = changes
 
 
-class SavedSharingUpdate(SocialError):
+class SavedSharingUpdate(PeopleError):
     pass
 
 
@@ -55,16 +55,16 @@ class Circles:
         before.update({key: before.get(key, []) for key in policy["direct"]})
         keys = set(desired)
         if self.people.by_keys(sorted(keys)).keys() != keys:
-            raise SocialError("save verified contacts before sharing with them")
+            raise PeopleError("save verified contacts before sharing with them")
         if any(key not in keys for key in restore):
-            raise SocialError("choose circle members to restore")
+            raise PeopleError("choose circle members to restore")
         members = current["members"]
         direct = dict(policy["direct"])
         member_by_key = {row["nodeKey"]: row for row in members}
         if direct_change:
             direct_key = direct_change["nodeKey"]
             if direct_key not in self.people.by_keys([direct_key]):
-                raise SocialError("save this person's verified contact before sharing")
+                raise PeopleError("save this person's verified contact before sharing")
             target = member_by_key.get(direct_key)
             restore = apply_direct_intent(direct, direct_change, target, definitions, restore)
         conflicts = outside_changes(members, before, policy, definitions)
@@ -77,10 +77,10 @@ class Circles:
                 if choices[key] == "keepDirect":
                     scope = row["current"].get("writeSchemas")
                     if scope is None and row["current"]["role"] == "submit":
-                        raise SocialError("Replace the old contributor grant with explicit schema names.")
+                        raise PeopleError("Replace the old contributor grant with explicit schema names.")
                     direct[key] = scope or []
-                elif choices[key] != "useSocial":
-                    raise SocialError("Choose how to resolve each outside grant.")
+                elif choices[key] != "usePeople":
+                    raise PeopleError("Choose how to resolve each outside grant.")
         for member in members:
             key = member["nodeKey"]
             if key in desired and key not in before and member["state"] == "active":
@@ -91,7 +91,7 @@ class Circles:
         if direct_change and direct_change["operation"] == "revokePerson":
             replacement = [revoke_row(target) if row["nodeKey"] == direct_key else row for row in replacement]
         if len(replacement) > 98:
-            raise SocialError("This database allows 98 roster entries, including revoked people.")
+            raise PeopleError("This database allows 98 roster entries, including revoked people.")
         next_policy = {"circles": circles, "direct": direct,
                        "confirmed": {row["nodeKey"]: grant_value(row)
                                      for row in replacement if row["nodeKey"] in desired}}
@@ -108,13 +108,13 @@ class Circles:
 
     @contextmanager
     def lock(self):
-        path = self.node.state_dir() / "social-circle-edit.lock"
+        path = self.node.state_dir() / "people-circle-edit.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as handle:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
-                raise SocialError("another circle edit is in progress; retry when it finishes") from error
+                raise PeopleError("another circle edit is in progress; retry when it finishes") from error
             yield
 
 
@@ -127,17 +127,17 @@ def store_policy(node, database, circles):
 
 def normalize(requests, definitions):
     if not isinstance(requests, list) or len(requests) > 50:
-        raise SocialError("provide up to 50 circles")
+        raise PeopleError("provide up to 50 circles")
     result = {}
     for circle in requests:
         name, keys, scope = circle["name"], circle["members"], circle["writeSchemas"]
         if not isinstance(name, str) or not (1 <= len(name.strip()) <= 64) or name.strip() in result:
-            raise SocialError("circle names must be unique and at most 64 characters")
+            raise PeopleError("circle names must be unique and at most 64 characters")
         if not isinstance(keys, list) or any(not isinstance(key, str) or not DIGEST.fullmatch(key) for key in keys):
-            raise SocialError("circle members must be verified node keys")
+            raise PeopleError("circle members must be verified node keys")
         if scope != FULL:
             if not isinstance(scope, list) or any(not isinstance(item, str) or item not in definitions for item in scope):
-                raise SocialError("select writable schemas installed in this database")
+                raise PeopleError("select writable schemas installed in this database")
             scope = sorted(set(scope))
         name = name.strip()
         result[name] = {"name": name, "members": sorted(set(keys)), "writeSchemas": scope}
@@ -162,7 +162,7 @@ def apply_direct_intent(direct, change, target, definitions, restore):
     key, operation = change["nodeKey"], change["operation"]
     if operation == "revokePerson":
         if target is None:
-            raise SocialError("this person has no grant on the database")
+            raise PeopleError("this person has no grant on the database")
         direct.pop(key, None)
         return restore
     scope = change["writeSchemas"]
@@ -173,9 +173,9 @@ def apply_direct_intent(direct, change, target, definitions, restore):
         if target and target["state"] == "revoked":
             restore = [*restore, key]
         elif not target or direct.get(key) != scope:
-            raise SocialError("choose a person whose access is revoked")
+            raise PeopleError("choose a person whose access is revoked")
     elif target and target["state"] == "revoked":
-        raise SocialError("explicitly restore this person's access")
+        raise PeopleError("explicitly restore this person's access")
     direct[key] = scope
     return restore
 
@@ -231,12 +231,12 @@ def combine_scope(circle, direct, definitions):
     if isinstance(direct, dict):
         return named_scope(circle, direct["names"])
     if direct:
-        # A grant made outside Social can list definition IDs. Keep it as written.
+        # A grant made outside People can list definition IDs. Keep it as written.
         if not circle:
             return direct
         registered = {definition: name for name, definition in definitions.items()}
         if any(registered.get(item) not in circle for item in direct):
-            raise SocialError("review the direct grant before combining it with a circle")
+            raise PeopleError("review the direct grant before combining it with a circle")
     return named_scope(circle, [])
 
 

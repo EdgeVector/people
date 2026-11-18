@@ -9,7 +9,7 @@ from uuid import UUID
 
 from circle_store import CircleStore, encoded
 from circles import GrantReview, SavedSharingUpdate, normalize
-from lastdb import SocialError
+from lastdb import PeopleError
 from sharing import can_manage_sharing
 
 
@@ -28,8 +28,8 @@ class ReusableCircles:
     def change(self, args, *, apply=False, token=None, defer=False):
         """Preview one edit under the lock, and apply that same preview when asked.
 
-        With `defer`, a database whose grants changed outside Social stays pending
-        for `social db retry --resolve`, and the other databases are applied.
+        With `defer`, a database whose grants changed outside People stays pending
+        for `people db retry --resolve`, and the other databases are applied.
         """
         with self.circles.lock():
             preview = self.edit_locked(args)
@@ -53,9 +53,9 @@ class ReusableCircles:
             if "databaseId" in args:
                 databases = pending.intersection({args["databaseId"]})
             if not databases:
-                raise SocialError("there is no pending circle update for the selection")
+                raise PeopleError("there is no pending circle update for the selection")
         if not retrying and pending.intersection(databases):
-            raise SocialError("finish the pending sharing update for the affected database before changing it again")
+            raise PeopleError("finish the pending sharing update for the affected database before changing it again")
 
         operations = dict(directory.operations)
         if operation:
@@ -66,11 +66,11 @@ class ReusableCircles:
         if not apply:
             return self.preview(fingerprint, plans)
         if args.get("token") != fingerprint:
-            raise SocialError("sharing changed since the preview; review the changes again")
+            raise PeopleError("sharing changed since the preview; review the changes again")
         if not retrying and any("error" in plan and "conflicts" not in plan for plan in plans):
-            raise SocialError("resolve the unavailable databases before applying this edit")
+            raise PeopleError("resolve the unavailable databases before applying this edit")
         if operation and any("error" in plan for plan in plans):
-            raise SocialError("resolve the outside grants in the preview before approving this request")
+            raise PeopleError("resolve the outside grants in the preview before approving this request")
         directory = self.store.save(directory, desired, pending | databases, operations, remove_request)
         if retrying:
             plans = self.replay_pending(directory, plans, review)
@@ -82,7 +82,7 @@ class ReusableCircles:
                      for entry in item.get(field, [])}
         try:
             people = self.circles.people.by_keys(node_keys)
-        except (SocialError, OSError, HTTPException):
+        except (PeopleError, OSError, HTTPException):
             people = {}
         return {"token": fingerprint, "databases": databases,
                 "contactNames": {key: person["display_name"] for key, person in people.items()}}
@@ -99,13 +99,13 @@ class ReusableCircles:
         def resume(database):
             try:
                 self.sharing.resume_pending(database)
-            except (SocialError, OSError, HTTPException):
+            except (PeopleError, OSError, HTTPException):
                 return None
             return database
 
         with ThreadPoolExecutor(max_workers=4) as pool:
             reopened = [database for database in pool.map(resume, saved) if database]
-        # A saved request can belong to another action in Social. Confirm the
+        # A saved request can belong to another action in People. Confirm the
         # approved circle or direct declaration against the resulting roster.
         refreshed = {plan["databaseId"]: plan for plan in self.prepare(
             directory.circles, reopened, directory.operations, review
@@ -134,27 +134,27 @@ class ReusableCircles:
     def replacement(self, prior, change, remove):
         identity = change["id"]
         if not isinstance(identity, str) or str(UUID(identity)) != identity:
-            raise SocialError("select a circle by its ID")
+            raise PeopleError("select a circle by its ID")
         previous = next((row for row in prior if row["id"] == identity), None)
         desired = [row for row in prior if row["id"] != identity]
         old_links = previous["links"] if previous else {}
         if remove:
             if not previous:
-                raise SocialError("this circle no longer exists")
+                raise PeopleError("this circle no longer exists")
             return desired, set(old_links)
         row = normalize([{**change, "writeSchemas": []}], {})[0]
         if any(other["name"].casefold() == row["name"].casefold() for other in desired):
-            raise SocialError("use a unique circle name")
+            raise PeopleError("use a unique circle name")
         keys = set(row["members"])
         if self.circles.people.by_keys(sorted(keys)).keys() != keys:
-            raise SocialError("save verified contacts before adding circle members")
+            raise PeopleError("save verified contacts before adding circle members")
         if not isinstance(change["links"], dict):
-            raise SocialError("select the databases linked to this circle")
+            raise PeopleError("select the databases linked to this circle")
         links = {}
         for database, scope in change["links"].items():
             if scope != "all":
                 if not isinstance(scope, list) or any(not isinstance(name, str) for name in scope):
-                    raise SocialError("choose schema names for the linked database")
+                    raise PeopleError("choose schema names for the linked database")
                 scope = sorted(set(scope))
             links[database] = scope
         desired.append({"id": identity, "name": row["name"], "members": row["members"], "links": links})
@@ -185,7 +185,7 @@ class ReusableCircles:
                 return {**item, "error": str(conflict), "conflicts": conflict.changes}
             except SavedSharingUpdate as error:
                 return {**item, "error": str(error), "savedRequest": True}
-            except (SocialError, OSError, HTTPException) as error:
+            except (PeopleError, OSError, HTTPException) as error:
                 return {**item, "error": str(error)}
 
         with ThreadPoolExecutor(max_workers=4) as pool:
@@ -200,23 +200,23 @@ class ReusableCircles:
         try:
             result = self.circles.apply(row["databaseId"], plan)
             return {**row, "revision": result["revision"], "status": "confirmed"}
-        except (SocialError, OSError, HTTPException) as error:
+        except (PeopleError, OSError, HTTPException) as error:
             return {**row, "error": str(error), "status": "pending"}
 
 
 def confirm(preview, token, *, defer=False):
     """Refuse to apply a preview that moved or that still has outside grants to resolve."""
     if token not in (None, preview["token"]):
-        raise SocialError("sharing changed since the preview; review the changes again")
+        raise PeopleError("sharing changed since the preview; review the changes again")
     names = preview.get("contactNames", {})
-    unresolved = [f'--resolve {row["name"]}:{names.get(item["nodeKey"], item["nodeKey"])}=keep|social'
+    unresolved = [f'--resolve {row["name"]}:{names.get(item["nodeKey"], item["nodeKey"])}=keep|people'
                   for row in preview["databases"] for item in row.get("conflicts", [])]
     if unresolved and not defer:
-        raise SocialError("grants changed outside Social; rerun with " + " ".join(unresolved))
+        raise PeopleError("grants changed outside People; rerun with " + " ".join(unresolved))
     blocked = [f'{row["name"]}: {row["error"]}' for row in preview["databases"]
                if "error" in row and not row.get("conflicts")]
     if blocked:
-        raise SocialError("; ".join(blocked))
+        raise PeopleError("; ".join(blocked))
 
 
 def impact(plan):

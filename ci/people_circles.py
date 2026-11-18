@@ -1,4 +1,4 @@
-"""Exercise a Social circle's whole-database reads and scoped writes in DEV."""
+"""Exercise a People circle's whole-database reads and scoped writes in DEV."""
 
 from contextlib import closing
 import hashlib
@@ -8,9 +8,9 @@ import sys
 import uuid
 
 from node import Connection
-from social_app import SETUP, install, observe_access, pick, read_records, sdk, social, write_owned
-from social_declarations import configure_bindings, external_changes, independent_update, revoke_roster
-from social_log_views import inbox, pending_positions, published_views, scope_for
+from people_app import SETUP, install, observe_access, pick, read_records, sdk, people, write_owned
+from people_declarations import configure_bindings, external_changes, independent_update, revoke_roster
+from people_log_views import inbox, pending_positions, published_views, scope_for
 from support import OperationError, decode_json, require, retry, run_operation, summary
 
 SCOPE = {"name": "whole-database", "version": 1}
@@ -64,7 +64,7 @@ def wait_text(node, database, schema, key, text, stage):
 
 
 def submit(node, database, update, *, mutation_id=None):
-    # The member submits on the owner socket. This is not a Social command.
+    # The member submits on the owner socket. This is not a People command.
     mutation_id = mutation_id or str(uuid.uuid4())
     with closing(Connection(node.socket)) as connection:
         connection.request("POST", f"/api/databases/{database}/submissions", json.dumps(update), {
@@ -82,7 +82,7 @@ def submit(node, database, update, *, mutation_id=None):
 
 def transfer(programs, root, publisher, recipient, api_key):
     name = f"ci-circles-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
-    if revision := os.environ.get("SOCIAL_INSTALL_REVISION"):
+    if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
     created = sdk(publisher, "create-shared", name=name)
     require(created["sharingMode"] == "whole_database" and created["name"] == name, "circle_sdk_create")
@@ -109,11 +109,11 @@ def transfer(programs, root, publisher, recipient, api_key):
     reader = programs.command(recipient.home, ["share", "contact", "--out", str(contact)])["recipient_public_key"]
     sender = programs.command(publisher.home, ["share", "contact", "--out", str(root / "owner.contact")])["recipient_public_key"]
     require(reader != sender, "circle_two_identities")
-    social(publisher, "person", "add", "Ana", "--node-key", reader, "--contact", str(contact), refusals=REFUSALS)
-    ready = retry("circle_cloud_ready", lambda: social(publisher, "db", "show", database),
+    people(publisher, "person", "add", "Ana", "--node-key", reader, "--contact", str(contact), refusals=REFUSALS)
+    ready = retry("circle_cloud_ready", lambda: people(publisher, "db", "show", database),
                   lambda row: row["sharing"].get("revision") == "0")
     require(set(definitions).issubset(ready["schemas"]), "circle_schema_catalog_missing")
-    retry("circle_second_cloud_ready", lambda: social(publisher, "db", "show", second),
+    retry("circle_second_cloud_ready", lambda: people(publisher, "db", "show", second),
           lambda row: row["sharing"].get("revision") == "0")
     try:
         share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender)
@@ -143,15 +143,15 @@ def share_with_circle(publisher, recipient, database, second, definitions, scope
             and receipt["revision"] == "1", "circle_sdk_sealed_invitation")
     exercise(publisher, recipient, database, receipt, definitions, scope)
     exercise_comment_ownership(publisher, recipient, database, definitions[STANDARD_COMMENT], scope, reader)
-    second_receipt = social(publisher, "invite", second, reader)
-    social(recipient, "db", "accept", "--publisher", sender, "--name", "second", stdin=second_receipt)
+    second_receipt = people(publisher, "invite", second, reader)
+    people(recipient, "db", "accept", "--publisher", sender, "--name", "second", stdin=second_receipt)
     wait_text(recipient, second, COMMENT, "seed", "Second database", "circle_second_database_read")
     observe_access(recipient, second, "active", 1, write_schemas=[])
     definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT], scope)
     read_links = ("--link", f"{database}=read", "--link", f"{second}={COMMENT}")
-    preview = social(publisher, "circle", "set", "Family", *read_links)
-    social(publisher, "grant", "revoke", second, reader, "--apply")
-    social(publisher, "circle", "set", "Family", *read_links, "--apply", "--token", preview["token"],
+    preview = people(publisher, "circle", "set", "Family", *read_links)
+    people(publisher, "grant", "revoke", second, reader, "--apply")
+    people(publisher, "circle", "set", "Family", *read_links, "--apply", "--token", preview["token"],
            refusal=b"sharing changed since the preview")
     require(revisions(edit_circle(publisher, *read_links)) == {database: "2", second: "2"},
             "circle_reader_revision")
@@ -163,7 +163,7 @@ def share_with_circle(publisher, recipient, database, second, definitions, scope
 
 
 def create_database(owner, name):
-    database = social(owner, "db", "create", name)["id"]
+    database = people(owner, "db", "create", name)["id"]
     report(f"Owned DEV mutation log {database} for {name}.")
     return database
 
@@ -176,9 +176,9 @@ def report(message):
 def edit_circle(owner, *arguments):
     """Preview a change to the Family circle, then apply exactly that preview."""
     edit = ("circle", "set", "Family", *arguments)
-    preview = social(owner, *edit, refusals=REFUSALS)
+    preview = people(owner, *edit, refusals=REFUSALS)
     require(all("error" not in row for row in preview["databases"]), "circle_reusable_preview")
-    response = social(owner, *edit, "--apply", "--token", preview["token"], refusals=REFUSALS)
+    response = people(owner, *edit, "--apply", "--token", preview["token"], refusals=REFUSALS)
     require(not response["pending"], "circle_reusable_apply")
     return response
 
@@ -188,10 +188,10 @@ def revisions(response):
 
 
 def cleanup(publisher, database):
-    roster = social(publisher, "db", "show", database, refusals=REFUSALS)["sharing"]
+    roster = people(publisher, "db", "show", database, refusals=REFUSALS)["sharing"]
     if roster.get("status") == "pending":
-        social(publisher, "db", "retry", database, refusals=REFUSALS)
-        roster = social(publisher, "db", "show", database, refusals=REFUSALS)["sharing"]
+        people(publisher, "db", "retry", database, refusals=REFUSALS)
+        roster = people(publisher, "db", "show", database, refusals=REFUSALS)["sharing"]
     require(roster.get("members") is not None, "circle_cleanup_roster_unavailable")
     revoke_roster(publisher, database)
     report("ExeMem confirmed the final recipient revocations.")
@@ -215,7 +215,7 @@ def exercise(publisher, recipient, database, receipt, definitions, scope):
     second_app = sdk(recipient, "read", database=database, schema=ALBUM, key="seed", appId="album-viewer")
     require(second_app == album, "independent_app_opens_same_published_album")
     require(album["fields"]["text"] == f"Initial {ALBUM}", "circle_sdk_read_shared_content")
-    report("The packaged SDK used Social to create a whole-database share, seal a circle invitation and accept it. The recipient read shared data through the LastDB SDK.")
+    report("The packaged SDK used People to create a whole-database share, seal a circle invitation and accept it. The recipient read shared data through the LastDB SDK.")
     summary("Ana read the seeded records in both Album and Comment.")
     observe_access(recipient, database, "active", 1, role="submit", write_schemas=COMMENT_GRANT)
     sdk_access = next(row for row in sdk(recipient, "list-databases") if row["id"] == database)["selfAccess"]

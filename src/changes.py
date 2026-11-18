@@ -4,12 +4,12 @@ import json
 import os
 from uuid import NAMESPACE_URL, uuid5
 
-from lastdb import SocialError
+from lastdb import PeopleError
 
 
 # A new circle's ID comes from its name, so a preview and its apply agree.
-CIRCLE_IDS = uuid5(NAMESPACE_URL, "social-graph/circle")
-RESOLUTIONS = {"keep": "keepDirect", "social": "useSocial"}
+CIRCLE_IDS = uuid5(NAMESPACE_URL, "people/circle")
+RESOLUTIONS = {"keep": "keepDirect", "people": "usePeople"}
 
 
 def same_circle(row, selector):
@@ -34,18 +34,18 @@ def parse_scope(text):
         return "all"
     names = sorted({name.strip() for name in text.split(",") if name.strip()})
     if not names:
-        raise SocialError("write a scope as read, all, or schema names such as social/Comment")
+        raise PeopleError("write a scope as read, all, or schema names such as social/Comment")
     return names
 
 
 def parse_review(app, entries):
-    """Turn `DATABASE:PERSON=keep|social` choices into a review keyed by database ID."""
+    """Turn `DATABASE:PERSON=keep|people` choices into a review keyed by database ID."""
     parsed = []
     for entry in entries or []:
         target, _, choice = entry.rpartition("=")
         database, _, person = target.partition(":")
         if choice not in RESOLUTIONS or not database or not person:
-            raise SocialError("write --resolve as DATABASE:PERSON=keep or DATABASE:PERSON=social")
+            raise PeopleError("write --resolve as DATABASE:PERSON=keep or DATABASE:PERSON=people")
         parsed.append((database, person, RESOLUTIONS[choice]))
     if not parsed:
         return {}
@@ -67,7 +67,7 @@ def circle_set(app, name, *, members=None, links=(), unlink=(), rename=None, rev
     for link in links:
         database, separator, scope = link.partition("=")
         if not separator:
-            raise SocialError("write --link as DATABASE=read, DATABASE=all, or DATABASE=Schema,Schema")
+            raise PeopleError("write --link as DATABASE=read, DATABASE=all, or DATABASE=Schema,Schema")
         scopes[app.owned_whole(database, rows)["id"]] = parse_scope(scope)
     for database in unlink:
         scopes.pop(database if database in scopes else app.selected(database, rows)["id"], None)
@@ -99,7 +99,7 @@ def grant_revoke(app, database, person, *, apply=False):
         members = app.sharing.configuration(database["id"])["members"]
         member = next((row for row in members if row["nodeKey"] == key), None)
         if member is None:
-            raise SocialError("the recipient has never been granted access to this database")
+            raise PeopleError("the recipient has never been granted access to this database")
         return {"applied": False, "databaseId": database["id"], "name": database["name"], "nodeKey": key,
                 "before": member, "after": {**member, "state": "revoked"}}
     revision = app.sharing.update_member(database["id"], key, False)
@@ -147,7 +147,7 @@ def seal(app, database, person, name, contact):
     database = app.sharing.owned(database)
     if contact is not None:
         if name is None:
-            raise SocialError("give --name with --contact")
+            raise PeopleError("give --name with --contact")
         key = app.remember_file(person, name, contact)["nodeKey"]
     else:
         key = app.resolve_people([person])[0]

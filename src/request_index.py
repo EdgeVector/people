@@ -5,8 +5,8 @@ import json
 from lastdb import LastDBError, record_mutation
 
 
-INDEX = "social-graph/PendingSharingRequest"
-REQUESTS = "social-graph/SharingRequest"
+INDEX = "people/PendingSharingRequest"
+REQUESTS = "people/SharingRequest"
 HASH = "awaiting"
 
 
@@ -50,7 +50,7 @@ class RequestIndex:
             except LastDBError as error:
                 if error.status != 409:
                     raise
-                # Another Social command may have cleaned up these entries first.
+                # Another People command may have cleaned up these entries first.
 
     def read_pending(self, request_ids):
         if not request_ids:

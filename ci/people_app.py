@@ -218,8 +218,15 @@ def read_records(node, database, schema, keys):
             fields = record.get("record") if isinstance(record, dict) else None
             revision = record.get("revision") if isinstance(record, dict) else None
             require(isinstance(fields, dict) and isinstance(revision, str) and revision, "record_read_row")
-            rows.append({"key": record.get("key"), "revision": revision, "fields": fields,
-                         "file": record.get("file")})
+            row = {"key": record.get("key"), "revision": revision, "fields": fields,
+                   "file": record.get("file")}
+            # created_by and updated_by sit beside the record. The node omits a missing one.
+            for name in ("created_by", "updated_by"):
+                value = record.get(name)
+                require(value is None or (isinstance(value, str) and len(value) > 0), "record_read_author")
+                if value is not None:
+                    row[name] = value
+            rows.append(row)
     return rows
 
 

@@ -155,7 +155,13 @@ and downloaded record readiness separately.
 Compatible schema upgrades keep a grant in place. The publisher still checks
 the specific current definition and the record rules for each write. On a
 whole-database share, a receiver with a `social/Comment` write grant can
-create comments and edit comments they created. The publisher can edit or
+create comments and edit comments they created. The author is `created_by`
+on the `POST /v1/read` reply: the lowercase hex node key of the writer.
+LastDB sets it when the comment is created and keeps it on a replace.
+`updated_by` is the node key of the writer of this revision. A write that
+names `created_by` or `updated_by` is refused. The `author_id` field is not
+the author. It is whatever the writer stored, or empty. A comment with no
+`created_by` stays editable only by the publisher. The publisher can edit or
 delete any comment. The shared-albums catalog schema is `social/Comment`,
 so that rule applies to comments in the setup.
 

@@ -19,8 +19,6 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 # Environment::as_str and the key in lastdb_node/environments.json.
 DEV_ENVIRONMENT = "dev"
-# Revision 0 is an empty member list. The caller supplies the account generation.
-MEMBER_LIST_REVISION = "0"
 AUTHORITY_DOMAIN = b"lastdb:share:node-read-authority:v1"
 HEADER_LIMIT = 4096
 
@@ -81,8 +79,7 @@ def _authority_digest(covered):
     return hashlib.sha256(framed).hexdigest()
 
 
-def _covered(public_hex, account, account_generation, path, database_id, issued, nonce, body,
-             member_revision=MEMBER_LIST_REVISION):
+def _covered(public_hex, account, account_generation, path, database_id, issued, nonce, body):
     stream = {
         "scope": {
             "account_generation": account_generation,
@@ -92,13 +89,13 @@ def _covered(public_hex, account, account_generation, path, database_id, issued,
     }
     covered = [
         2, database_id, stream, "POST", path, hashlib.sha256(body).hexdigest(),
-        issued, nonce, member_revision, public_hex, DEV_ENVIRONMENT,
+        issued, nonce, public_hex, DEV_ENVIRONMENT,
     ]
     return stream, covered
 
 
 def authorization(key, path, database_id, issued_at_ms, body, account_generation, nonce=None,
-                  *, account=None, member_revision=MEMBER_LIST_REVISION):
+                  *, account=None):
     """Sign a live DEV token for an owned or publisher-provided stream."""
     if nonce is None:
         nonce = os.urandom(32).hex()
@@ -111,8 +108,7 @@ def authorization(key, path, database_id, issued_at_ms, body, account_generation
     issued = str(int(issued_at_ms))
     public = key.public.hex()
     stream, covered = _covered(
-        public, account or account_id(key.public), account_generation, path, database_id, issued, nonce, body,
-        member_revision)
+        public, account or account_id(key.public), account_generation, path, database_id, issued, nonce, body)
     digest = _authority_digest(covered)
     token_json = json.dumps({
         "version": 2,
@@ -123,7 +119,6 @@ def authorization(key, path, database_id, issued_at_ms, body, account_generation
         "path": path,
         "issued_at_ms": issued,
         "nonce": nonce,
-        "member_list_revision": member_revision,
         "node_public_key": public,
     }, separators=(",", ":")).encode("utf-8")
     signature = key.sign(digest.encode("ascii"))

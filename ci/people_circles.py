@@ -336,7 +336,7 @@ def exercise(publisher, recipient, database, receipt, definitions, scope, member
         created,
         mutation(COMMENT, definitions[COMMENT], "seed", "A create cannot replace the seed"),
     ]
-    queued = queue_and_restart(publisher, recipient, database, scope, 1, updates,
+    queued = queue_and_restart(publisher, recipient, database, scope, updates,
                                check_status=True)
     verify_results(recipient, database, queued)
     verify_settled_retry(publisher, recipient, database, scope, updates[1], queued[1])

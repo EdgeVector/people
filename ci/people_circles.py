@@ -69,16 +69,23 @@ def wait_text(name, node, database, schema, key, text, stage):
 
 
 def submit(node, database, update, *, mutation_id=None):
+    """Append one proposal. A 503 here is not retried.
+
+    The node uses one sentence for every unconfirmed append and sets
+    Retry-After only on a retryable refusal. This route's 503 has neither
+    a distinct cause nor that header, so a pause would not tell them apart.
+    """
     mutation_id = mutation_id or str(uuid.uuid4())
+    path = f"/api/databases/{database}/submissions"
     with closing(Connection(node.socket)) as connection:
-        connection.request("POST", f"/api/databases/{database}/submissions", json.dumps(update), {
+        connection.request("POST", path, json.dumps(update), {
             "Content-Type": "application/json", "Idempotency-Key": mutation_id,
         })
         with connection.getresponse() as reply:
             raw = reply.read(65537)
             if reply.status != 202:
                 fail("circle_submission_http_%s_expected_202" % reply.status,
-                     "status=%s head=%s" % (reply.status, _head(raw)))
+                     _refused(path, reply, raw, update))
             body = decode_json(raw)
     sequence = body.get("submission_sequence")
     check(body.get("ok") is True and body.get("mutation_id") == mutation_id
@@ -89,8 +96,42 @@ def submit(node, database, update, *, mutation_id=None):
     return mutation_id
 
 
-def _head(raw):
-    return clip_public(raw.decode("utf-8", "replace").split("\n", 1)[0], 60)
+def _refused(path, reply, raw, update):
+    retry_after = reply.getheader("Retry-After") or "-"
+    return "POST %s status=%s retry_after=%s %s body=%s" % (
+        path, reply.status, _mark(str(retry_after)), _proposal(update), _body(raw))
+
+
+def _proposal(update):
+    key = update.get("key_value") if isinstance(update, dict) else None
+    ident = key.get("hash") if isinstance(key, dict) else None
+    schema = update.get("schema") if isinstance(update, dict) else None
+    kind = update.get("mutation_type") if isinstance(update, dict) else None
+    return "schema=%s op=%s key=%s" % (_mark(schema), _mark(kind), _mark(ident))
+
+
+def _mark(value):
+    if isinstance(value, str) and value and len(value) <= 48 and all(char.isalnum() or char in "_./:-" for char in value):
+        return value
+    return "-"
+
+
+def _body(raw):
+    """The owner socket returns the sentence. A JSON error keeps its code and message."""
+    try:
+        parsed = decode_json(raw)
+    except OperationError:
+        parsed = None
+    if isinstance(parsed, dict):
+        error = parsed.get("error")
+        if isinstance(error, dict):
+            return clip_public("%s %s" % (error.get("code") or "-", error.get("message") or "-"), 80)
+        if isinstance(error, str):
+            message = parsed.get("message")
+            text = error if not isinstance(message, str) else "%s %s" % (error, message)
+            return clip_public(text, 80)
+    text = raw.decode("utf-8", "replace").split("\n", 1)[0]
+    return clip_public(text, 80)
 
 
 def transfer(programs, root, publisher, recipient, api_key):

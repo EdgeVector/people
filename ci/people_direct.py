@@ -9,6 +9,7 @@ import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
+from direct_publish import begin_ana_publish, note_ana_publish
 from direct_report import access_report, attach, label, row_report, watch, watch_rows
 from people_app import install, people, write_owned
 from share_node import (
@@ -90,7 +91,16 @@ def authored(named, database, key, text, author, stage):
         return all(row and row["fields"].get("text") == text and row.get("created_by") == author
                    and row.get("updated_by") == author for row in rows)
 
-    watch_rows(named, database, key, stage, done)
+    # The visibility wait is the poll bound. Samples stop when the records
+    # arrive or when that wait ends. The timeline is Ana's publish only.
+    begin_ana_publish()
+    ana = next((node for name, node in named if name == "Ana"), None)
+
+    def observe():
+        if ana is not None:
+            note_ana_publish(ana, database)
+
+    watch_rows(named, database, key, stage, done, observe)
 
 
 def converge(named, database, key, authors):

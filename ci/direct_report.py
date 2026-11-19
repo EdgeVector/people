@@ -2,8 +2,10 @@
 
 failure() keeps the last 600 characters of command_output. Callers trim
 before that cut so the record reads stay ahead of the node dump. people-direct
-passes evidence=True. That appends a direct-logs section, and failure() then
-keeps 65536 characters. The compact node line is unchanged.
+passes evidence=True. That appends a publish section and a direct-logs
+section, and failure() then keeps 65536 characters. The compact node line
+is unchanged. direct-logs is still attached when an earlier read fails.
+The publish section is built in direct_publish.py.
 
 A node entry is files=cursor/prefix/error from log-sync/<database id>/,
 then ops (a call containing x/databases or /v1/write, or a refused sync,
@@ -16,6 +18,7 @@ import re
 import time
 
 from direct_nodes import clip_public, failure_evidence, node_dump
+from direct_publish import member_publish
 from share_node import keyed
 from support import OperationError, redact_command_text
 
@@ -36,16 +39,18 @@ def label(value):
     return "?"
 
 
-def watch(stage, read, done, describe):
+def watch(stage, read, done, describe, observe=None):
     """Retry for 150 seconds, the same bound as the other sharing waits.
 
     The node pauses 1s when idle, 5s on retry, 30s for a snapshot, and 60s
     on backoff. A payment hold waits 300s. 150s covers a retry and a backoff.
+    observe runs on each pass and once more at the end. It cannot fail the wait.
     """
     deadline = time.monotonic() + 150
     last_error = None
     seen = None
     while time.monotonic() < deadline:
+        safe_observe(observe)
         try:
             value = read()
         except OperationError as error:
@@ -56,18 +61,21 @@ def watch(stage, read, done, describe):
             try:
                 ready = done(value)
             except OperationError as error:
+                safe_observe(observe)
                 remember(error, describe, value, "differed")
                 raise
             if ready:
+                safe_observe(observe)
                 return value
         time.sleep(2)
+    safe_observe(observe)
     reason = "differed" if present(seen) else "timed_out"
     text = with_read_error(safe_describe(describe, seen, reason), last_error)
     fields = refusal_fields(seen, last_error)
     raise OperationError(stage, command_output=(text[:560], ""), **fields)
 
 
-def watch_rows(named, database, key, stage, done):
+def watch_rows(named, database, key, stage, done, observe=None):
     """Read one key on each named node. A node that errors stays in the report."""
     names = [name for name, _node in named]
     state = {"notes": []}
@@ -93,7 +101,7 @@ def watch_rows(named, database, key, stage, done):
     def ready(rows):
         return not state["notes"] and done(rows)
 
-    return watch(stage, read, ready, describe)
+    return watch(stage, read, ready, describe, observe)
 
 
 def row_report(names, rows, reason):
@@ -122,22 +130,45 @@ def access_report(name, shown, reason):
 def attach(error, roster, database, evidence=False):
     """Add one compact node entry. A second call leaves an existing dump.
 
-    evidence adds each node's daemon lines and log-sync files. Circles leave
-    it off, so their detail stays inside the 600 character tail.
+    evidence adds the publish section, then each node's daemon lines and
+    log-sync files. Circles leave it off, so their detail stays inside the
+    600 character tail. A failed dump or publish read still leaves direct-logs.
     """
-    try:
-        existing = current_detail(error)
-        if existing is None:
-            return
-        dump = node_dump(roster, database)[:300]
-        text = existing + MARKER + dump if existing else "nodes=" + dump
-        if evidence:
-            text += "\ndirect-logs\n" + failure_evidence(roster, database)
-            error.command_output = (text, "")
-            return
+    existing = safe_detail(error)
+    if existing is None:
+        return
+    dump = guarded(lambda: node_dump(roster, database)[:300], "dump=failed")
+    text = existing + MARKER + dump if existing else "nodes=" + dump
+    if not evidence:
         error.command_output = (text[:560], "")
+        return
+    text += "\npublish\n" + guarded(lambda: member_publish(roster, database), "publish=unread")
+    text += "\ndirect-logs\n" + guarded(lambda: failure_evidence(roster, database), "evidence=failed")
+    error.command_output = (text, "")
+
+
+def safe_observe(observe):
+    if observe is None:
+        return
+    try:
+        observe()
     except Exception:
         return
+
+
+def safe_detail(error):
+    try:
+        return current_detail(error)
+    except Exception:
+        return ""
+
+
+def guarded(read, fallback):
+    try:
+        value = read()
+    except Exception:
+        return fallback
+    return value if isinstance(value, str) and value else fallback
 
 
 def one_row(row):

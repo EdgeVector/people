@@ -1,10 +1,12 @@
 """Compact sync, ops, and log-sync state for one people-direct node.
 
-Secrets are removed with redact_command_text before any clip. A down
-node still contributes the log-sync files on disk.
+Secrets are removed with redact_secrets before any clip. A down node still
+contributes the log-sync files on disk. failure_evidence adds the daemon
+log lines and the small log-sync files. The compact node line is unchanged.
 """
 
 import http.client
+import json
 import os
 from pathlib import Path
 import re
@@ -12,10 +14,17 @@ import stat
 from contextlib import closing
 
 from node import Connection
-from support import OperationError, decode_json, redact_command_text
+from support import OperationError, decode_json, redact_secrets
 
 
 DATABASE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+LOG_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
+# HTTP statuses are bounded so a timestamp does not match 4xx or 5xx.
+LOG_HINT = re.compile(
+    r"log-sync|append|received|retry|unauthorized|error|(?<![0-9])[45][0-9]{2}(?![0-9])",
+    re.IGNORECASE,
+)
+FILE_NAME = re.compile(r"[A-Za-z0-9._-]{1,40}")
 
 
 def node_dump(roster, database):
@@ -190,10 +199,21 @@ def read_limited(path, limit):
 
 def clip_public(value, limit):
     """Redact first, then keep the front. A clip must not leave a token prefix."""
+    return clip_end(value, limit, tail=False)
+
+
+def clip_tail(value, limit):
+    """Redact first, then keep the end of one log line."""
+    return clip_end(value, limit, tail=True)
+
+
+def clip_end(value, limit, tail):
     if not isinstance(value, str) or not value:
         return "-"
-    redacted = redact_command_text(value)
-    return redacted[:limit] if redacted else "-"
+    redacted = redact_secrets(value.replace("\n", " ").strip())
+    if not redacted:
+        return "-"
+    return redacted[-limit:] if tail else redacted[:limit]
 
 
 def bit(value):
@@ -210,3 +230,132 @@ def count_of(value):
 
 def num(value):
     return str(value) if type(value) is int else "-"
+
+
+def failure_evidence(roster, database):
+    """Per node: matching daemon lines, then session, prefix, and error files."""
+    parts = []
+    for name, node in roster:
+        try:
+            parts.append("%s %s %s" % (name, log_text(node), sync_files(node, database)))
+        except Exception:
+            parts.append("%s evidence=failed" % name)
+    try:
+        cloud = ana_cloud(roster)
+    except Exception:
+        cloud = "Ana cloud=unread"
+    if cloud:
+        parts.append(cloud)
+    return "\n".join(parts)[:48000]
+
+
+def log_text(node):
+    name = os.environ.get("PEOPLE_DIRECT_DAEMON_LOG", "")
+    if not LOG_NAME.fullmatch(name):
+        return "log=off"
+    raw, truncated = tail_bytes(Path(node.home) / name, 262144)
+    if raw is None:
+        return "log=-"
+    text = raw.decode("utf-8", "replace")
+    if truncated:
+        cut = text.find("\n")
+        text = text[cut + 1:] if cut >= 0 else ""
+    lines = text.splitlines()
+    matched = [clip_tail(line, 300) for line in lines if LOG_HINT.search(line)]
+    matched = [line for line in matched if line != "-"]
+    body = " || ".join(matched[-15:]) if matched else "-"
+    return "log=%s/%s %s %s" % (len(matched), len(lines), "tail" if truncated else "all", body)
+
+
+def tail_bytes(path, limit):
+    try:
+        info = path.lstat()
+    except OSError:
+        return None, False
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        return None, False
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None, False
+    try:
+        size = os.fstat(descriptor).st_size
+        truncated = size > limit
+        if truncated:
+            os.lseek(descriptor, size - limit, os.SEEK_SET)
+        return os.read(descriptor, limit), truncated
+    except OSError:
+        return None, False
+    finally:
+        os.close(descriptor)
+
+
+def sync_files(node, database):
+    if not isinstance(database, str) or not DATABASE_ID.fullmatch(database):
+        return "session=- prefix=- error=-"
+    root = Path(node.home) / "log-sync" / database
+    parts = [
+        "session=%s" % small_text(root / "session.json", 4096),
+        "prefix=%s" % small_text(root / "prefix.json", 4096),
+    ]
+    parts.extend(error_files(root))
+    return " ".join(parts)
+
+
+def small_text(path, limit):
+    state = file_state(path, limit)
+    if state != "ok":
+        return state
+    raw = read_limited(path, limit)
+    if raw is None:
+        return "-"
+    return clip_public(raw.decode("utf-8", "replace"), 1200)
+
+
+def file_state(path, limit):
+    try:
+        info = path.lstat()
+    except OSError:
+        return "-"
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        return "-"
+    if info.st_size > limit:
+        return "too-large"
+    return "ok"
+
+
+def error_files(directory):
+    if directory.is_symlink() or not directory.is_dir():
+        return ["error=-"]
+    try:
+        entries = sorted(directory.iterdir(), key=lambda item: item.name)
+    except OSError:
+        return ["error=-"]
+    found = []
+    for path in entries:
+        if "error" not in path.name or not FILE_NAME.fullmatch(path.name):
+            continue
+        if path.is_symlink() or not path.is_file():
+            continue
+        found.append("%s=%s" % (path.name, small_text(path, 1024)))
+        if len(found) == 4:
+            break
+    return found or ["error=-"]
+
+
+def ana_cloud(roster):
+    """Ana's owner-socket cloud sync section. Other nodes keep the compact sync line."""
+    node = None
+    for name, item in roster:
+        if name == "Ana":
+            node = item
+    if node is None:
+        return ""
+    cloud = cloud_sync(owner_status(node))
+    if cloud is None:
+        return "Ana cloud=unread"
+    try:
+        text = json.dumps(cloud, separators=(",", ":"), sort_keys=True)
+    except (TypeError, ValueError):
+        return "Ana cloud=unread"
+    return "Ana cloud=%s" % clip_public(text, 1500)

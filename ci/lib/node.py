@@ -177,6 +177,7 @@ class OwnedNode:
         self.account = account
         self.socket = home / "data/folddb.sock"
         self.process, self.start_ts, self.instance_id = None, None, None
+        self.daemon_log = None
         self.clean_stops, self.forced = 0, False
         self.isolated_copy = isolated_copy
         require(len(str(self.socket).encode()) + len(".tmp") < 104, "socket_path_size")
@@ -204,20 +205,62 @@ class OwnedNode:
         if remove_saved:
             (self.home / CREDENTIALS_FILE).unlink(missing_ok=True)
 
-    def start(self):
-        require(self.process is None and not self.socket.exists(), "owned_boot_state")
-        self.offline()
-        self.programs.verify()
+    def daemon_log_path(self):
+        """people-direct sets PEOPLE_DIRECT_DAEMON_LOG. Other recipes leave stderr discarded."""
+        name = os.environ.get("PEOPLE_DIRECT_DAEMON_LOG", "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", name):
+            return None
+        return self.home / name
+
+    def open_daemon_log(self):
+        path = self.daemon_log_path()
+        if path is None:
+            return None
+        try:
+            if path.is_symlink():
+                raise OperationError("daemon_log")
+            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        except OperationError:
+            raise
+        except OSError:
+            raise OperationError("daemon_log") from None
+        return os.fdopen(descriptor, "ab", buffering=0)
+
+    def close_daemon_log(self):
+        log = self.daemon_log
+        self.daemon_log = None
+        if log is None:
+            return
+        try:
+            log.close()
+        except OSError:
+            return
+
+    def boot_daemon(self):
+        """Start lastdbd. Stderr is a file only when people-direct asked for one."""
+        self.close_daemon_log()
         environment = dict(
             self.programs.environment,
             LASTDB_ISOLATED_COPY="1" if self.isolated_copy else "0",
             LASTDB_TTL_SWEEP="0",
         )
-        self.process = subprocess.Popen(
-            [str(self.programs.directory / "lastdbd"), "--data-dir", str(self.home)],
-            env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True,
-        )
+        self.daemon_log = self.open_daemon_log()
+        stderr = subprocess.DEVNULL if self.daemon_log is None else self.daemon_log
+        try:
+            return subprocess.Popen(
+                [str(self.programs.directory / "lastdbd"), "--data-dir", str(self.home)],
+                env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=stderr, start_new_session=True,
+            )
+        except BaseException:
+            self.close_daemon_log()
+            raise
+
+    def start(self):
+        require(self.process is None and not self.socket.exists(), "owned_boot_state")
+        self.offline()
+        self.programs.verify()
+        self.process = self.boot_daemon()
 
         def check_boot():
             require(self.process.poll() is None, "daemon_start_exit")
@@ -267,7 +310,14 @@ class OwnedNode:
 
     def stop(self, *, remove_saved=False):
         if self.process is None:
+            self.close_daemon_log()
             return
+        try:
+            self._stop_process(remove_saved=remove_saved)
+        finally:
+            self.close_daemon_log()
+
+    def _stop_process(self, *, remove_saved):
         process = self.process
         if process.poll() is None:
             boot = self.call("/api/system/boot-identity")
@@ -290,7 +340,9 @@ class OwnedNode:
 
     def cleanup_stop(self):
         if self.process is None:
+            self.close_daemon_log()
             return
         self.forced = stop_process(self.process, timeout=210, kill_timeout=10) or self.forced
         self.process = None
         self.disconnect()
+        self.close_daemon_log()

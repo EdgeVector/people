@@ -1,7 +1,9 @@
 """What a people-direct wait saw, and a compact dump of each node.
 
 failure() keeps the last 600 characters of command_output. Callers trim
-before that cut so the record reads stay ahead of the node dump.
+before that cut so the record reads stay ahead of the node dump. people-direct
+passes evidence=True. That appends a direct-logs section, and failure() then
+keeps 65536 characters. The compact node line is unchanged.
 
 A node entry is files=cursor/prefix/error from log-sync/<database id>/,
 then ops (a call containing x/databases or /v1/write, or a refused sync,
@@ -13,7 +15,7 @@ that status lists).
 import re
 import time
 
-from direct_nodes import clip_public, node_dump
+from direct_nodes import clip_public, failure_evidence, node_dump
 from share_node import keyed
 from support import OperationError, redact_command_text
 
@@ -35,7 +37,11 @@ def label(value):
 
 
 def watch(stage, read, done, describe):
-    """Retry for 150 seconds, the same bound as the other sharing waits."""
+    """Retry for 150 seconds, the same bound as the other sharing waits.
+
+    The node pauses 1s when idle, 5s on retry, 30s for a snapshot, and 60s
+    on backoff. A payment hold waits 300s. 150s covers a retry and a backoff.
+    """
     deadline = time.monotonic() + 150
     last_error = None
     seen = None
@@ -113,14 +119,22 @@ def access_report(name, shown, reason):
         label(access.get("write")), label(access.get("stale")))
 
 
-def attach(error, roster, database):
-    """Add one compact node entry. A second call leaves an existing dump."""
+def attach(error, roster, database, evidence=False):
+    """Add one compact node entry. A second call leaves an existing dump.
+
+    evidence adds each node's daemon lines and log-sync files. Circles leave
+    it off, so their detail stays inside the 600 character tail.
+    """
     try:
         existing = current_detail(error)
         if existing is None:
             return
         dump = node_dump(roster, database)[:300]
         text = existing + MARKER + dump if existing else "nodes=" + dump
+        if evidence:
+            text += "\ndirect-logs\n" + failure_evidence(roster, database)
+            error.command_output = (text, "")
+            return
         error.command_output = (text[:560], "")
     except Exception:
         return

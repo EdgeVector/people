@@ -80,13 +80,18 @@ class OperationError(Exception):
         self.command_output = command_output
 
 
-def redact_command_text(text):
-    """Drop long tokens, then keep the tail. A cut token must not leave a short secret."""
+def redact_secrets(text):
+    """Replace a long token. A node key is public and stays."""
     def keep(match):
         token = match.group(0)
         return token if NODE_KEY.fullmatch(token) else "[redacted]"
 
-    return SECRET_TOKEN.sub(keep, text)[-600:]
+    return SECRET_TOKEN.sub(keep, text)
+
+
+def redact_command_text(text, limit=600):
+    """Drop long tokens, then keep the tail. A cut token must not leave a short secret."""
+    return redact_secrets(text)[-limit:]
 
 
 def failure(error):
@@ -101,7 +106,11 @@ def failure(error):
     output = error.command_output
     if output is not None:
         stderr, stdout = output
-        value["detail"] = redact_command_text(stderr if stderr else stdout)
+        raw = stderr if stderr else stdout
+        # people-direct appends daemon lines and log-sync files after this marker.
+        # Other recipes stay on the short tail.
+        limit = 65536 if isinstance(raw, str) and "\ndirect-logs\n" in raw else 600
+        value["detail"] = redact_command_text(raw, limit)
     return value
 
 

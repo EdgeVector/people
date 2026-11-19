@@ -86,7 +86,7 @@ def exercise_comment_ownership(publisher, recipient, database, definitions, scop
     mine = standard_comment(database, definition, "receiver", "Ana wrote this", "spoofed-author")
     refuse_created_by(publisher, database, definition)
     write_owned(publisher, database, owner_comment)
-    queue_and_restart(publisher, recipient, database, scope, 1, [mine])
+    queue_and_restart(publisher, recipient, database, scope, [mine])
     expected = {"publisher": "Publisher wrote this", "receiver": "Ana wrote this"}
     named = (("publisher", publisher), ("Ana", recipient))
     pages = _comments(named, database, expected, "standard_comments_visible")
@@ -98,7 +98,7 @@ def exercise_comment_ownership(publisher, recipient, database, definitions, scop
     edit = replace_comment(mine, moderated["receiver"], "Edited by Ana")
     edit["record"]["author_id"] = "spoofed-editor"
     cross_author = replace_comment(owner_comment, moderated["publisher"], "Forbidden edit")
-    queue_and_restart(publisher, recipient, database, scope, 1, [cross_author, edit])
+    queue_and_restart(publisher, recipient, database, scope, [cross_author, edit])
     expected["receiver"] = "Edited by Ana"
     pages = _comments(named, database, expected, "standard_comment_edit_applied")
     _authors(pages, reader, "spoofed-editor", "standard_edited_author_unchanged", False)
@@ -109,7 +109,7 @@ def exercise_comment_ownership(publisher, recipient, database, definitions, scop
     album = recipe.mutation("social/Album", definitions["social/Album"], "member-album", "")
     album["record"] = {"title": "Not allowed", "description": "Member write", "cover_photo_id": "none",
                        "created_at": "2026-11-14T00:00:00Z"}
-    queue_and_restart(publisher, recipient, database, scope, 1, [delete, album])
+    queue_and_restart(publisher, recipient, database, scope, [delete, album])
     expected.pop("receiver")
     wait_pages(named, "standard_own_delete_applied", lambda node: _delete_view(node, database),
                _gone(expected), delete_line)
@@ -132,7 +132,7 @@ def exercise_upgrade(publisher, recipient, database, previous, scope, member_wri
                   record={**current["fields"], "text": "After edit"},
                   source_file_name="replacement.txt", metadata={"share_author": "replacement-author"})
     stale = {**update, "record": {**update["record"], "text": "Stale edit"}}
-    queue_and_restart(publisher, recipient, database, scope, 1, [update, stale])
+    queue_and_restart(publisher, recipient, database, scope, [update, stale])
     for name, node in (("publisher", publisher), ("Ana", recipient)):
         recipe.wait_text(name, node, database, recipe.COMMENT, "upgrade", "After edit",
                          "circle_upgraded_record_edited")
@@ -154,7 +154,7 @@ def exercise_reader(publisher, recipient, database, definitions, scope):
                      "circle_reader_retains_access")
     update = recipe.mutation(recipe.COMMENT, definitions[recipe.COMMENT], "reader", "Reader submission")
     recipe.refuse_submission(recipient, database, update)
-    page = inbox(publisher, scope, database, 2)
+    page = inbox(publisher, scope, database)
     entries = page.get("entries") if isinstance(page, dict) else None
     check(entries == [], "circle_reader_not_queued", inbox_line(page))
     for name, node in (("publisher", publisher), ("Ana", recipient)):
@@ -173,45 +173,45 @@ def verify_results(recipient, database, queued):
 
 def verify_settled_retry(publisher, recipient, database, scope, update, mutation_id):
     recipe = _recipe()
-    pending = inbox(publisher, scope, database, 1)
+    pending = inbox(publisher, scope, database)
     entries = pending.get("entries") if isinstance(pending, dict) else None
     check(entries == [], "circle_retry_starts_with_settled_inbox", inbox_line(pending))
-    published = published_views(recipient, scope, database, 1)
+    published = published_views(recipient, scope, database)
     _same_database(recipient, database)
     recipe.submit(recipient, database, update, mutation_id=mutation_id)
     results = sdk(recipient, "submission-status", database=database, ids=[mutation_id])
     found = _statuses(results)
     check(found == ["published"], "circle_retry_preserves_outcome",
           "statuses=%s n=%s" % (status_text(found), len(found)))
-    again = inbox(publisher, scope, database, 1)
+    again = inbox(publisher, scope, database)
     check(again == pending, "circle_retry_does_not_enqueue",
           "%s was=%s" % (inbox_line(again), inbox_line(pending)))
-    views = published_views(recipient, scope, database, 1)
+    views = published_views(recipient, scope, database)
     check(views == published, "circle_retry_does_not_publish",
           "%s was=%s" % (views_line(views), views_line(published)))
     recipe.report("Ana retried a settled mutation with the same UUID and operation. Its published outcome and both log positions stayed the same.")
 
 
-def queue_and_restart(publisher, recipient, database, scope, revision, updates, *, check_status=False):
+def queue_and_restart(publisher, recipient, database, scope, updates, *, check_status=False):
     recipe = _recipe()
     _same_database(recipient, database)
     publisher.stop()
     try:
-        page = inbox(publisher, scope, database, revision)
+        page = inbox(publisher, scope, database)
         entries = page.get("entries") if isinstance(page, dict) else None
         check(entries == [], "circle_empty_inbox", inbox_line(page))
-        published_before = published_views(recipient, scope, database, revision)
+        published_before = published_views(recipient, scope, database)
         queued = [recipe.submit(recipient, database, update) for update in updates]
         if check_status:
             results = sdk(recipient, "submission-status", database=database, ids=queued)
             found = _statuses(results)
             check(isinstance(results, list) and all(item == "submitted" for item in found),
                   "circle_sdk_proposals_pending", "statuses=%s n=%s" % (status_text(found), len(found)))
-        through = pending_positions(publisher, recipient, scope, database, revision, queued, published_before)
+        through = pending_positions(publisher, recipient, scope, database, queued, published_before)
         summary("ExeMem queued the mutations in the publisher's inbox and refused Ana's inbox read and settlement. The published log did not advance.")
     finally:
         publisher.start()
-    wait("circle_publisher_consumed_submissions", lambda: inbox(publisher, scope, database, revision),
+    wait("circle_publisher_consumed_submissions", lambda: inbox(publisher, scope, database),
          lambda page: _consumed(page, through),
          lambda page, reason: "%s %s through=%s" % (reason, inbox_line(page), mark(through)))
     return queued

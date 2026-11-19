@@ -249,17 +249,21 @@ until LastDB confirms the result or definitively rejects it.
 
 ## How sharing works
 
-Every active receiver can send an encrypted change to the pending mutation
-log. The receiver posts `POST /v1/x/databases` with `"action": "submit"`,
-the database id, the mutation document, and `idempotency_key` (one non-nil
-lowercase UUID). The call answers 202 with `ok`, `status: submitted`,
-`mutation_id`, and `submission_sequence`. It does not write a record on the
-receiver. An owned database or an unknown id answers 404. A share that is not
-a whole database answers 403. Only the publisher's LastDB can read pending
-changes. It checks each one against the member-write map and the member's
-role, discards refusals, and uploads accepted changes to the separate
-published log. Receivers follow that log and can read the resulting record
-after it syncs, with `POST /v1/read` and the `database` field. An app that
+An active member with role `submit` can send an encrypted change to the
+pending mutation log. The receiver posts `POST /v1/x/databases` with
+`"action": "submit"`, the database id, the mutation document, and
+`idempotency_key` (one non-nil lowercase UUID). The call answers 202 with
+`ok`, `status: submitted`, `mutation_id`, and `submission_sequence`. It does
+not write a record on the receiver. An owned database or an unknown id
+answers 404. A share that is not a whole database answers 403. A member
+whose role is `read` is refused: HTTP 403, code `permission_denied`, message
+`this member cannot submit this shared mutation`, and no `Retry-After`. Do
+not retry. The publisher does not receive that proposal. Only the
+publisher's LastDB can read pending changes. It checks each accepted
+proposal against the member-write map, discards refusals, and uploads
+accepted changes to the separate published log. Receivers follow that log
+and can read the resulting record after it syncs, with `POST /v1/read` and
+the `database` field. An app that
 wants to show the sender's own change before the publisher accepts it uses
 `"action": "submission_status"` and shows that pending state.
 `POST /v1/write` to a received database is refused: the database is read only.
@@ -273,7 +277,7 @@ schema grants, and the publisher's authority to approve each mutation.
 
 A shared database has one map, `memberWrites`, set by the publisher. Each schema in the map is `owner_only`, `own_records`, or `shared`. A schema that is not in the map is `owner_only`. The albums setup sets `social/Album`, `social/AlbumItem`, and `social/Photo` to `owner_only`, and `social/Comment` to `own_records`.
 
-A member with role `read` cannot submit. A member with role `submit` can submit. The publisher accepts or discards each submission from the map and that role. Under `own_records`, a member can create a record, and can change or delete a record they created. Under `owner_only`, the publisher discards the member's write. Under `shared`, a member can write any record.
+A member with role `read` cannot submit. That proposal is a final HTTP 403, code `permission_denied`, message `this member cannot submit this shared mutation`, with no `Retry-After`. A member with role `submit` can submit. The publisher accepts or discards each of those submissions from the map and the member's role. Under `own_records`, a member can create a record, and can change or delete a record they created. Under `owner_only`, the publisher discards the member's write. Under `shared`, a member can write any record.
 
 People does not send a per-member schema list for this. A circle link or a preset still chooses `read` or `submit`. What a member may change is `selfAccess.memberWrites` together with the member's role.
 

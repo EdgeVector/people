@@ -68,12 +68,14 @@ def wait_text(name, node, database, schema, key, text, stage):
     wait_field(name, stage, lambda: query(node, database, schema, key), "text", text)
 
 
-def submit(node, database, update, *, mutation_id=None):
-    """Append one proposal. A 503 here is not retried.
+CANNOT_SUBMIT = "this member cannot submit this shared mutation"
 
-    The node uses one sentence for every unconfirmed append and sets
-    Retry-After only on a retryable refusal. This route's 503 has neither
-    a distinct cause nor that header, so a pause would not tell them apart.
+
+def submit(node, database, update, *, mutation_id=None):
+    """Append one proposal from a member who may submit. Only 202 succeeds.
+
+    An append the node cannot confirm is 503 and carries Retry-After. This
+    helper does not pause. A read-role member uses refuse_submission.
     """
     mutation_id = mutation_id or str(uuid.uuid4())
     path = f"/api/databases/{database}/submissions"
@@ -94,6 +96,23 @@ def submit(node, database, update, *, mutation_id=None):
           saw("receipt", ok=body.get("ok"), status=body.get("status"), id_match=body.get("mutation_id") == mutation_id,
               sequence=sequence if type(sequence) is int else None))
     return mutation_id
+
+
+def refuse_submission(node, database, update):
+    """A read-role proposal is a final 403. 202 and 503 both fail."""
+    path = f"/api/databases/{database}/submissions"
+    with closing(Connection(node.socket)) as connection:
+        connection.request("POST", path, json.dumps(update), {
+            "Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()),
+        })
+        with connection.getresponse() as reply:
+            raw = reply.read(65537)
+            detail = _refused(path, reply, raw, update)
+            if reply.status != 403:
+                fail("circle_submission_http_%s_expected_403" % reply.status, detail)
+            retry_after = reply.getheader("Retry-After")
+    message = raw.decode("utf-8", "replace").strip()
+    check(message == CANNOT_SUBMIT and not retry_after, "circle_reader_submission_refused", detail)
 
 
 def _refused(path, reply, raw, update):

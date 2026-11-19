@@ -5,10 +5,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import http.client
 import json
-import time
 import uuid
 
-from lastdb import LastDBError, PeopleError, call_until_share_confirmed
+from lastdb import LastDBError, PeopleError, no_cloud_account, raise_share_refusal
 
 
 SPEC = {"name": "social", "version": 1}
@@ -141,10 +140,13 @@ class Sharing:
         try:
             revision = self.apply(database_id, request)
         except LastDBError as error:
-            # 409 is the share revision conflict. The extension reports it as
-            # `conflict`, with the message that the configuration is at another
-            # revision. 400, 403, and 404 are final refusals.
-            if error.status == 409:
+            # 409 is the share revision conflict, except no cloud account.
+            # The extension reports the conflict as `conflict`, with the
+            # message that the configuration is at another revision. No
+            # cloud account is also HTTP 409 and is final. 400, 403, and
+            # 404 are final refusals. A retryable 503 leaves this handler
+            # as a PeopleError, so the saved request stays.
+            if error.status == 409 and not no_cloud_account(error):
                 self.clear_update(database_id, saved)
                 return None
             if error.status not in (400, 403, 404):
@@ -166,24 +168,21 @@ class Sharing:
 
     def apply(self, database_id, update):
         wire = {key: update[key] for key in ("expectedRevision", "requestId", "members")}
-        for attempt in range(3):
-            try:
-                # The same unconfirmed 503 as a fresh database: the cloud has
-                # no head yet. Any other refusal, including a different 503,
-                # is final. A dropped connection still gets the short retry.
-                ack = call_until_share_confirmed(
-                    lambda: self.node.databases("set_share_config", database=database_id, config=wire))
-            except TRANSPORT_ERRORS:
-                if attempt == 2:
-                    raise
-                time.sleep(attempt + 1)
-                continue
-            else:
-                if (ack["databaseId"] != database_id or ack["requestId"] != update["requestId"]
-                        or ack["committed"] is not True
-                        or int(ack["revision"]) != int(update["expectedRevision"]) + 1):
-                    raise PeopleError("LastDB returned a mismatched sharing acknowledgement")
-                return ack["revision"]
+        ack = self.share_call(lambda: self.node.databases(
+            "set_share_config", database=database_id, config=wire))
+        if (ack["databaseId"] != database_id or ack["requestId"] != update["requestId"]
+                or ack["committed"] is not True
+                or int(ack["revision"]) != int(update["expectedRevision"]) + 1):
+            raise PeopleError("LastDB returned a mismatched sharing acknowledgement")
+        return ack["revision"]
+
+    def share_call(self, operation):
+        """One share call. The node waits for enrollment. People does not."""
+        try:
+            return operation()
+        except LastDBError as error:
+            raise_share_refusal(error)
+            raise
 
     def invite(self, selector, display_name, node_key, contact_path=None):
         database_id = self.owned(selector)["id"]
@@ -203,8 +202,8 @@ class Sharing:
         return self.seal(database_id, node_key, contact_code, revision, publisher)
 
     def seal(self, database_id, node_key, contact_code, revision, publisher):
-        response = self.node.databases(
-            "invite", database=database_id, contactCode=contact_code, expectedNodeKey=node_key)
+        response = self.share_call(lambda: self.node.databases(
+            "invite", database=database_id, contactCode=contact_code, expectedNodeKey=node_key))
         if response["databaseId"] != database_id or not response.get("invitation"):
             raise PeopleError("LastDB returned a mismatched invitation")
         return {"databaseId": database_id, "revision": revision, "publisher": publisher,
@@ -213,9 +212,9 @@ class Sharing:
     def accept(self, receipt, publisher, name):
         if receipt.get("publisher") != publisher:
             raise PeopleError("invitation publisher differs from the trusted publisher")
-        return self.node.databases(
+        return self.share_call(lambda: self.node.databases(
             "accept", invitation=receipt["invitation"], publisher=publisher,
-            database_id=receipt["databaseId"], name=name)["database"]
+            database_id=receipt["databaseId"], name=name))["database"]
 
 
 def read_invitation(stream):

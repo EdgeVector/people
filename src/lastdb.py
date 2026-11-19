@@ -20,7 +20,6 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
-import time
 
 
 class PeopleError(Exception):
@@ -31,10 +30,10 @@ class LastDBError(PeopleError):
     def __init__(self, method, path, status, body):
         self.status = status
         self.body = body
-        self.code, detail = error_detail(body)
-        if detail is None:
-            detail = body if isinstance(body, str) else "request failed"
-        super().__init__(f"{method} {path} returned HTTP {status} ({detail})")
+        self.code, self.detail = error_detail(body)
+        if self.detail is None:
+            self.detail = body if isinstance(body, str) else "request failed"
+        super().__init__(f"{method} {path} returned HTTP {status} ({self.detail})")
 
 
 def error_detail(body):
@@ -46,45 +45,42 @@ def error_detail(body):
     return error, error
 
 
-# The only 503 People treats as "the cloud cannot confirm this yet".
-# LastDB at nightly 7c389d44f maps every failed member list, including the
-# cloud's not-found for a mutation log head that create has not uploaded
-# and a node with no cloud account, to this one sentence
-# (config.rs set_config / read_config, database_share.rs). The databases
-# extension does not say which of the two it is. A settings refusal keeps
-# the service text, so it does not match.
+# Share calls on POST /v1/x/databases. The node owns the enrollment wait.
+# The app API keeps the message and maps the owner code: no_cloud_account
+# is HTTP 409 conflict, and both 503s are busy. nightly 734c565e6.
+NO_CLOUD_ACCOUNT = "this node has no cloud account"
+DATABASE_ENROLLING = "the database is still enrolling with the cloud; retry"
 SHARE_UNCONFIRMED = "share configuration is not confirmed"
-SHARE_CONFIRM_SECONDS = 120
 
 
-def share_configuration_unconfirmed(error):
-    """True only when the reply is that exact 503 sentence."""
+def no_cloud_account(error):
+    """HTTP 409. This node has no cloud account. Do not retry."""
+    return (isinstance(error, LastDBError) and error.status == 409
+            and (error.code == "no_cloud_account" or error.detail == NO_CLOUD_ACCOUNT))
+
+
+def share_unconfirmed(error):
+    """HTTP 503 after enrollment. The service answer could not be confirmed."""
     return (isinstance(error, LastDBError) and error.status == 503
-            and str(error).endswith(f"({SHARE_UNCONFIRMED})"))
+            and (error.code == "share_configuration_unconfirmed" or error.detail == SHARE_UNCONFIRMED))
 
 
-def call_until_share_confirmed(operation, seconds=None):
-    """Call until the share configuration can be confirmed, or the bound passes.
+def raise_share_refusal(error):
+    """Raise a share refusal. People does not wait.
 
-    The wait is only for `share configuration is not confirmed`. Another
-    status, another 503, and a transport error all surface at once. When
-    the wait ends, the last 503 is raised unchanged. The default bound is
-    120 seconds, for a sharing update that must commit. A caller that must
-    not block on a node with no cloud account passes a shorter bound.
+    Still enrolling, and any other HTTP 503 except the unconfirmed sentence,
+    tells the user to run the same command again. The unconfirmed sentence
+    is raised unchanged. Every other status, including no cloud account, is
+    raised unchanged. A setup reports no cloud account before calling this.
     """
-    deadline = time.monotonic() + (SHARE_CONFIRM_SECONDS if seconds is None else seconds)
-    pause = 0.5
-    while True:
-        try:
-            return operation()
-        except LastDBError as error:
-            if not share_configuration_unconfirmed(error):
-                raise
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise
-            time.sleep(min(pause, remaining))
-            pause = min(pause * 2, 5)
+    if not isinstance(error, LastDBError) or error.status != 503 or share_unconfirmed(error):
+        raise error
+    if error.code == "database_enrolling" or error.detail == DATABASE_ENROLLING:
+        detail = "the database is still enrolling with the cloud"
+    else:
+        detail = error.detail if isinstance(error.detail, str) and error.detail else "the share call failed"
+        detail = detail.rstrip(".")
+    raise PeopleError(f"{detail}; run the same command again") from error
 
 
 class LocalConnection(http.client.HTTPConnection):

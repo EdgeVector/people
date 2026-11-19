@@ -1,6 +1,6 @@
 {
   "name": "@lastdb/people-client",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Run the installed People command from a JavaScript app.",
   "license": "Apache-2.0",
   "repository": {

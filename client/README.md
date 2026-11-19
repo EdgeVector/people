@@ -154,9 +154,11 @@ albums.rememberDefinition('social/Album', verified.definitions['social/Album']!)
 ```
 
 The setup result includes `memberWrites`. It is the stored map when People
-confirmed the share configuration, and `"pending"` when it did not. A pending
-create still places the schemas. Once the node is connected, `people db
-verify ID --setup shared-albums --finish` sets the map.
+confirmed the share configuration, and `"pending"` when this node has no
+cloud account. A pending create still places the schemas. Once the node is
+connected, `people db verify ID --setup shared-albums --finish` sets the map.
+A database that is still enrolling fails the command and tells you to run it
+again. `share configuration is not confirmed` fails the command as well.
 
 Verification by ID also works on a received share once it has synced its
 schemas. Setup version 1 requires the catalog's schema shapes and leaves

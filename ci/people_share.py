@@ -118,9 +118,6 @@ def verify_shared_albums_setup(node, name):
     setup = {"setupName": "shared-albums", "requiredVersion": 1}
     created = people(node, "db", "create", name, "--setup", setup["setupName"])
     database = created["databaseId"]
-    if created["memberWrites"] == "pending":
-        # The head can still be uploading on a node that just connected. Finish sets the map.
-        created = people(node, "db", "verify", database, "--setup", setup["setupName"], "--finish")
     require(str(uuid.UUID(database)) == database and created["name"] == name
             and created["setupName"] == setup["setupName"] and created["version"] == 1
             and created["databaseId"] == database and created["memberWrites"] != "pending",

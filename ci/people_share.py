@@ -127,6 +127,10 @@ def verify_shared_albums_setup(node, name):
     recovered = sdk(node, "setup", **setup, databaseId=incomplete["id"], finishExisting=True)
     require(recovered["databaseId"] == incomplete["id"]
             and recovered["definitions"] == definitions, "people_named_setup_repaired_by_id")
+    expected_writes = json.loads((SETUP / "member-writes.json").read_text())
+    for database_id in (database, recovered["databaseId"]):
+        stored = node.call(f"/api/databases/{database_id}/share/config").get("memberWrites")
+        require(stored == expected_writes, "people_named_setup_member_writes")
     people(node, "db", "verify", database, "--setup", setup["setupName"], "--version", "2",
            refusal=b"supported People database setup")
     write_album(node, database, 0)

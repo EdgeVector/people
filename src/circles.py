@@ -75,16 +75,13 @@ class Circles:
             for row in conflicts:
                 key = row["nodeKey"]
                 if choices[key] == "keepDirect":
-                    scope = row["current"].get("writeSchemas")
-                    if scope is None and row["current"]["role"] == "submit":
-                        raise PeopleError("Replace the old contributor grant with explicit schema names.")
-                    direct[key] = scope or []
+                    direct[key] = scope_for_role(row["current"]["role"])
                 elif choices[key] != "usePeople":
                     raise PeopleError("Choose how to resolve each outside grant.")
         for member in members:
             key = member["nodeKey"]
             if key in desired and key not in before and member["state"] == "active":
-                direct[key] = member.get("writeSchemas") or []
+                direct[key] = scope_for_role(member["role"])
         for key in direct:
             desired.setdefault(key, [])
         replacement = merge(members, before, desired, set(restore), direct, definitions)
@@ -154,8 +151,20 @@ def resolve(circles):
     return result
 
 
+def scope_for_role(role):
+    """A direct grant remembers read or submit. The database map decides the schemas."""
+    return "all" if role == "submit" else []
+
+
+def wire_member(key, role, state, *, regrant=False):
+    row = {"nodeKey": key, "role": role, "state": state}
+    if regrant:
+        row["regrant"] = True
+    return row
+
+
 def revoke_row(row):
-    return {"nodeKey": row["nodeKey"], "role": row["role"], "state": "revoked", "writeSchemas": []}
+    return {"nodeKey": row["nodeKey"], "role": row["role"], "state": "revoked"}
 
 
 def apply_direct_intent(direct, change, target, definitions, restore):
@@ -181,8 +190,7 @@ def apply_direct_intent(direct, change, target, definitions, restore):
 
 
 def grant_value(member):
-    scope = member.get("writeSchemas", [] if member["role"] == "read" else None)
-    return {"state": member["state"], "role": member["role"], "writeSchemas": scope}
+    return {"state": member["state"], "role": member["role"]}
 
 
 def outside_changes(members, before, policy, definitions):
@@ -195,7 +203,9 @@ def outside_changes(members, before, policy, definitions):
         previous = confirmed.get(key)
         if previous is None:
             scope = combine_scope(before[key], policy["direct"].get(key), definitions)
-            previous = {"state": "active", "role": "submit" if scope else "read", "writeSchemas": scope}
+            previous = {"state": "active", "role": "submit" if scope else "read"}
+        else:
+            previous = grant_value(previous)
         current = grant_value(row)
         if previous != current:
             changes.append({"nodeKey": key, "confirmed": previous, "current": current})
@@ -203,14 +213,13 @@ def outside_changes(members, before, policy, definitions):
 
 
 def merge(current, before, desired, restore, direct, definitions):
-    members = {row["nodeKey"]: row for row in current}
+    members = {row["nodeKey"]: wire_member(row["nodeKey"], row["role"], row["state"]) for row in current}
     for key in before.keys() - desired.keys():
         previous = members.get(key)
         if previous and previous["state"] == "active":
             if key in direct:
                 scope = direct[key]
-                members[key] = {"nodeKey": key, "state": "active", "role": "submit" if scope else "read",
-                                "writeSchemas": scope}
+                members[key] = wire_member(key, "submit" if scope else "read", "active")
             else:
                 members[key] = revoke_row(previous)
     for key, scope in desired.items():
@@ -218,10 +227,8 @@ def merge(current, before, desired, restore, direct, definitions):
         if previous and previous["state"] == "revoked" and key not in restore:
             continue
         scope = combine_scope(scope, direct.get(key), definitions)
-        row = {"nodeKey": key, "state": "active", "role": "submit" if scope else "read", "writeSchemas": scope}
-        if previous and previous["state"] == "revoked":
-            row["regrant"] = True
-        members[key] = row
+        members[key] = wire_member(key, "submit" if scope else "read", "active",
+                                   regrant=bool(previous and previous["state"] == "revoked"))
     return [members[key] for key in sorted(members)]
 
 

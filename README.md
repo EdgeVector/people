@@ -238,8 +238,8 @@ lowercase UUID). The call answers 202 with `ok`, `status: submitted`,
 `mutation_id`, and `submission_sequence`. It does not write a record on the
 receiver. An owned database or an unknown id answers 404. A share that is not
 a whole database answers 403. Only the publisher's LastDB can read pending
-changes. It checks each one against the current schema permissions and record
-rules, discards refusals, and uploads accepted changes to the separate
+changes. It checks each one against the member-write map and the member's
+role, discards refusals, and uploads accepted changes to the separate
 published log. Receivers follow that log and can read the resulting record
 after it syncs, with `POST /v1/read` and the `database` field. An app that
 wants to show the sender's own change before the publisher accepts it uses
@@ -250,6 +250,14 @@ wants to show the sender's own change before the publisher accepts it uses
 People changes must preserve the two logs, the signed per-database roster and
 schema grants, and the publisher's authority to approve each mutation.
 [Requirements to preserve](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/shared-database-mutation-logs.md#requirements-to-preserve)
+
+## What members can change
+
+A shared database has one map, `memberWrites`, set by the publisher. Each schema in the map is `owner_only`, `own_records`, or `shared`. A schema that is not in the map is `owner_only`. The albums setup sets `social/Album`, `social/AlbumItem`, and `social/Photo` to `owner_only`, and `social/Comment` to `own_records`.
+
+A member with role `read` cannot submit. A member with role `submit` can submit. The publisher accepts or discards each submission from the map and that role. Under `own_records`, a member can create a record, and can change or delete a record they created. Under `owner_only`, the publisher discards the member's write. Under `shared`, a member can write any record.
+
+People does not send a per-member schema list for this. A circle link or a preset still chooses `read` or `submit`. What a member may change is `selfAccess.memberWrites` together with the member's role.
 
 ## Choosing a database for an app
 
@@ -281,7 +289,7 @@ the app socket, with `people` registered:
 | Mode | What it proves |
 | --- | --- |
 | `people-share` | Save a contact, set up `shared-albums`, invite, accept, read, revoke and regrant on a filtered share, with two scoped content clients |
-| `people-circles` | Circles with per-database write scopes, allowed and refused writes, app sharing requests, grants changed outside People, direct grant, revoke and restore |
+| `people-circles` | Circles on a database whose setup set the member-write map, allowed and refused writes, app sharing requests, grants changed outside People, direct grant, revoke and restore |
 | `people-prepare` | The manifest and schemas produce a valid unsigned registry declaration for this commit on a fresh node |
 | `people-link` | Open a read link with no member and no cloud account, start that reader from a snapshot, then refuse its writes and its sync after read returns to members |
 | `people-direct` | Two Submit members write directly, converge on one key, a reader is refused, and a proposal works again after write returns to proposals |

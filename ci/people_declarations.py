@@ -107,11 +107,11 @@ def put_members(node, database, revision, members):
     return value
 
 
-def external_changes(publisher, circle, database, reader, schema):
+def external_changes(publisher, circle, database, reader):
     person = Ed25519PrivateKey.generate().public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
     current = roster(publisher, database)
-    separate = {"nodeKey": person, "state": "active", "role": "read", "writeSchemas": []}
+    separate = {"nodeKey": person, "state": "active", "role": "read"}
     put_members(publisher, database, current["revision"], [*current["members"], separate])
     change = {"operation": "setCircleBinding", "databaseId": database,
               "circleId": circle["id"], "preset": "commenter"}
@@ -121,13 +121,13 @@ def external_changes(publisher, circle, database, reader, schema):
             "unrelated_owner_grant_keeps_people_applicable")
     current = roster(publisher, database)
     require(separate in current["members"], "external_grant_preserved")
-    outside = {"nodeKey": reader, "state": "active", "role": "submit", "writeSchemas": {"names": [schema]}}
+    outside = {"nodeKey": reader, "state": "active", "role": "read"}
     put_members(publisher, database, current["revision"], [outside, separate])
     request_id = propose(publisher, "photo-journal", {**change, "preset": "viewer"})["requestId"]
     review = preview_request(publisher, request_id)
     conflict = review["databases"][0]["conflicts"]
     require(len(conflict) == 1 and conflict[0]["nodeKey"] == reader
-            and conflict[0]["current"]["writeSchemas"] == outside["writeSchemas"], "outside_scope_requires_review")
+            and conflict[0]["current"]["role"] == "read", "outside_scope_requires_review")
     approve(publisher, request_id, review, refusal=b"grants changed outside People")
     require(outside in roster(publisher, database)["members"], "outside_scope_preserved_before_review")
     choices = {database: {reader: "keep"}}
@@ -152,15 +152,15 @@ def person_requests(publisher, database, reader, separate):
         result = approve(publisher, request_id, preview_request(publisher, request_id))
         rows = roster(publisher, database)["members"]
         grant = next(row for row in rows if row["nodeKey"] == reader)
-        require(result["status"] == "confirmed" and grant["state"] == state
-                and grant["writeSchemas"] == [] and separate in rows, "app_direct_grant_lifecycle")
+        require(result["status"] == "confirmed" and grant["state"] == state and grant["role"] == "read"
+                and "writeSchemas" not in grant and separate in rows, "app_direct_grant_lifecycle")
     summary("The app requested an explicit revoke and restore for one person, and the publisher kept "
             "the other independent grant in place.")
 
 
 def independent_update(publisher, circle_id, first, second, reader, schema):
     current = roster(publisher, first)
-    outside = {"nodeKey": reader, "state": "active", "role": "submit", "writeSchemas": {"names": [schema]}}
+    outside = {"nodeKey": reader, "state": "active", "role": "submit"}
     put_members(publisher, first, current["revision"], [
         outside if row["nodeKey"] == reader else row for row in current["members"]
     ])
@@ -188,16 +188,23 @@ def independent_update(publisher, circle_id, first, second, reader, schema):
             and roster(publisher, first) == first_before, "app_second_database_confirmed_while_first_pending")
 
     result = people(publisher, "db", "retry", first, "--resolve", f"{first}:{reader}=keep")
-    require(not result["pending"] and roster(publisher, first) == first_before
+    after = roster(publisher, first)
+    require(not result["pending"] and member_rows(after) == member_rows(first_before)
+            and "writeSchemas" not in next(row for row in after["members"] if row["nodeKey"] == reader)
             and sdk(publisher, "sharing-status", requestId=request_id)["status"] == "confirmed",
             "app_first_database_finished_without_disturbing_second")
     summary("A pending grant review blocked the same database while a second database confirmed its own "
             "owner-approved update. Resolving the first preserved the second outcome.")
 
 
+def member_rows(config):
+    return sorted((row["nodeKey"], row["role"], row["state"]) for row in config["members"])
+
+
 def revoke_roster(node, database):
     current = roster(node, database)
     if any(row["state"] == "active" for row in current["members"]):
-        members = [{**row, "state": "revoked", "writeSchemas": []} for row in current["members"]]
+        members = [{"nodeKey": row["nodeKey"], "role": row["role"], "state": "revoked"}
+                   for row in current["members"]]
         put_members(node, database, current["revision"], members)
     require(all(row["state"] == "revoked" for row in roster(node, database)["members"]), "circle_cleanup_revoked")

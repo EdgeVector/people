@@ -84,7 +84,7 @@ class Setups:
         if existing or saved["fields"]["ready"]:
             database = existing or self.database(database_id)
         else:
-            database = self.sharing.create(name, whole=True, request_id=database_id)
+            database = self.sharing.create(name, request_id=database_id)
         if database["id"] != database_id or database["kind"] != "shareable":
             raise PeopleError("this setup belongs to an owned database")
         database_id = database["id"]

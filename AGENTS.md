@@ -25,11 +25,13 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
 
 - No tests. Pull requests get syntax, manifest and `--help` checks. The
   sharing flow is proven on main by `.github/workflows/dev-sharing.yml`
-  (`people-share`, `people-circles`, `people-scale`, `people-prepare`). It runs on every
+  (`people-share`, `people-circles`, `people-scale`, `people-prepare`,
+  `people-link`, `people-direct`). It runs on every
   push to main, daily at 09:23 UTC after the LastDB nightly, and by manual
   dispatch, never on a pull request. The recipes
-  are in `ci/`. They start two fresh LastDB nodes from a published LastDB
-  nightly, connect them to the DEV cloud, and drive this commit's `people`
+  are in `ci/`. `people-direct` starts four fresh LastDB nodes. The other
+  modes start two. They come from a published LastDB nightly. The publisher
+  connects to the DEV cloud. The recipe drives this commit's `people`
   command through the launcher on the app socket. A step that sets up the
   node keeps the owner socket. A change that alters command output or behaviour must update
   the recipes in the same PR.

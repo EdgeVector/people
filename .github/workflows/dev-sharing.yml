@@ -1,15 +1,18 @@
 name: DEV sharing
 
-# Real sharing checks for People. Each mode starts two fresh LastDB nodes on
-# the runner (a publisher and a recipient), connects them to the DEV cloud, and
-# drives this commit's `people` command through a published LastDB nightly.
+# Real sharing checks for People. Each mode starts fresh LastDB nodes on the
+# runner, connects the publisher to the DEV cloud, and drives this commit's
+# `people` command through a published LastDB nightly. people-direct starts
+# four nodes. The other modes start a publisher and one recipient.
 # The recipes are in ci/ and their node helpers in ci/lib/. A checkout of
 # EdgeVector/lastdb at the nightly's exact source commit supplies the compiled
 # endpoint profile, lastdb_node/environments.json, and the app SDK's data
 # client for reading shared records. The People client under test is client/.
 #
 # Cloud steps run only on main. A pull request gets the syntax job and never
-# receives cloud credentials.
+# receives cloud credentials. The sharing job checks out the event commit.
+# It does not check out another ref: that would run branch code in the
+# privileged main job.
 on:
   push:
     branches: [main]
@@ -24,7 +27,7 @@ on:
       mode:
         description: "Which check to run"
         type: choice
-        options: [all, people-share, people-circles, people-scale, people-prepare]
+        options: [all, people-share, people-circles, people-scale, people-prepare, people-link, people-direct]
         default: all
       lastdb_release:
         description: "LastDB nightly tag, for example nightly-20261116-3484b912b. Empty selects the newest published nightly"
@@ -75,8 +78,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$MODE" in
-            all) modes='["people-share","people-circles","people-scale","people-prepare"]' ;;
-            people-share|people-circles|people-scale|people-prepare) modes="[\"$MODE\"]" ;;
+            all) modes='["people-share","people-circles","people-scale","people-prepare","people-link","people-direct"]' ;;
+            people-share|people-circles|people-scale|people-prepare|people-link|people-direct) modes="[\"$MODE\"]" ;;
             *) exit 2 ;;
           esac
           printf 'modes=%s\n' "$modes" >> "$GITHUB_OUTPUT"
@@ -166,7 +169,7 @@ jobs:
           test -f "$source/lastdb_node/environments.json"
           printf 'LASTDB_SOURCE=%s\n' "$source" >> "$GITHUB_ENV"
       - name: Build the LastDB app SDK for content reads
-        if: matrix.mode != 'people-prepare'
+        if: matrix.mode == 'people-share' || matrix.mode == 'people-circles' || matrix.mode == 'people-scale'
         run: |
           set -euo pipefail
           # ci/people_sdk.mjs uses this repo's People client. It needs the LastDB
@@ -199,6 +202,8 @@ jobs:
             people-circles) recipe=people_circles ;;
             people-scale) recipe=people_scale ;;
             people-prepare) recipe=people_prepare ;;
+            people-link) recipe=people_link ;;
+            people-direct) recipe=people_direct ;;
             *) exit 2 ;;
           esac
           export PYTHONPATH="$GITHUB_WORKSPACE/ci/lib"

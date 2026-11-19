@@ -27,8 +27,10 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
   sharing flow is proven on main by `.github/workflows/dev-sharing.yml`
   (`people-share`, `people-circles`, `people-scale`, `people-prepare`,
   `people-link`, `people-direct`). It runs on every
-  push to main, daily at 09:23 UTC after the LastDB nightly, and by manual
-  dispatch, never on a pull request. The recipes
+  push to main, hourly at minute 41 UTC when the newest published LastDB
+  nightly has not yet been attempted, daily at 09:23 UTC, and by manual
+  dispatch. A red schedule or push run opens one `scheduled-failure` issue.
+  It never runs on a pull request. The recipes
   are in `ci/`. `people-direct` starts four fresh LastDB nodes. The other
   modes start two. They come from a published LastDB nightly. The publisher
   connects to the DEV cloud. The recipe drives this commit's `people`

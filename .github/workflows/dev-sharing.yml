@@ -13,13 +13,22 @@ name: DEV sharing
 # receives cloud credentials. The sharing job checks out the event commit.
 # It does not check out another ref: that would run branch code in the
 # privileged main job.
+#
+# new-nightly selects the newest published LastDB nightly. A sharing job
+# records that it started by saving the Actions cache key
+# nightly-attempted-<tag>. That key is immutable, and nothing in this
+# workflow executes the cached file. Only the first attempt of the minute-41
+# poll skips a tag that already has the key. The 09:23 run, a push, a manual
+# dispatch, and a human re-run always start sharing. A poll that is cancelled
+# while pending never starts the sharing job, so it does not save the key.
 on:
   push:
     branches: [main]
-  # LastDB publishes its nightly from a 07:17 UTC schedule. Run two hours later
-  # so a LastDB change that breaks sharing shows up here the same day.
+  # 07:17 UTC is when LastDB publishes its nightly. 09:23 UTC always proves
+  # the newest one. Minute 41 polls for a nightly no sharing job has started.
   schedule:
     - cron: '23 9 * * *'
+    - cron: '41 * * * *'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -84,15 +93,88 @@ jobs:
           esac
           printf 'modes=%s\n' "$modes" >> "$GITHUB_OUTPUT"
 
+  new-nightly:
+    name: New nightly
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.select.outputs.tag }}
+      run_sharing: ${{ steps.decide.outputs.run_sharing }}
+    steps:
+      - name: Select the newest published nightly
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LASTDB_RELEASE: ${{ inputs.lastdb_release }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -euo pipefail
+          tag="$LASTDB_RELEASE"
+          if [ -z "$tag" ]; then
+            tag="$(gh api 'repos/EdgeVector/lastdb/releases?per_page=30' \
+              --jq '[.[] | select(.draft == false and (.tag_name | startswith("nightly-")))] | sort_by(.published_at) | last | .tag_name')"
+          fi
+          [[ "$tag" =~ ^nightly-[0-9]{8}-[0-9a-f]{9}$ ]]
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          # github.event.schedule tells the two crons apart. Any other event,
+          # the daily cron, and a re-run (attempt > 1) always share.
+          if [ "$EVENT_NAME" = "schedule" ] && [ "$EVENT_SCHEDULE" = "41 * * * *" ] && [ "$GITHUB_RUN_ATTEMPT" = "1" ]; then
+            printf 'poll=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'poll=false\n' >> "$GITHUB_OUTPUT"
+          fi
+          {
+            echo "### Nightly"
+            echo
+            printf -- '- Tag: `%s`\n' "$tag"
+            printf -- '- Event: `%s`\n' "$EVENT_NAME"
+            printf -- '- Schedule: `%s`\n' "${EVENT_SCHEDULE:-none}"
+            printf -- '- Run attempt: `%s`\n' "$GITHUB_RUN_ATTEMPT"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Look for an attempt of this nightly
+        id: attempted
+        if: steps.select.outputs.poll == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/nightly-attempt
+          key: nightly-attempted-${{ steps.select.outputs.tag }}
+          lookup-only: true
+      - name: Decide whether sharing runs
+        id: decide
+        env:
+          POLL: ${{ steps.select.outputs.poll }}
+          CACHE_HIT: ${{ steps.attempted.outputs.cache-hit }}
+          TAG: ${{ steps.select.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # A miss leaves cache-hit empty. Only an exact hit skips.
+          if [ "$POLL" = "true" ] && [ "$CACHE_HIT" = "true" ]; then
+            printf 'run_sharing=false\n' >> "$GITHUB_OUTPUT"
+            printf -- '- Sharing: skipped, `%s` was already attempted\n' "$TAG" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf 'run_sharing=true\n' >> "$GITHUB_OUTPUT"
+            echo "- Sharing: run" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   sharing:
     name: ${{ matrix.mode }} in DEV
-    needs: recipe-syntax
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [recipe-syntax, new-nightly]
+    if: >-
+      !cancelled() &&
+      needs.recipe-syntax.result == 'success' &&
+      needs.new-nightly.result == 'success' &&
+      needs.new-nightly.outputs.run_sharing == 'true'
     environment: dev-sharing
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
+      actions: write
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -105,17 +187,38 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Write the attempt marker
+        env:
+          TAG: ${{ needs.new-nightly.outputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^nightly-[0-9]{8}-[0-9a-f]{9}$ ]]
+          mkdir -p "$RUNNER_TEMP/nightly-attempt"
+          printf '%s\n' "$TAG" > "$RUNNER_TEMP/nightly-attempt/tag.txt"
+      - name: See whether this nightly was already marked
+        id: prior
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/nightly-attempt
+          key: nightly-attempted-${{ needs.new-nightly.outputs.tag }}
+          lookup-only: true
+      # The save action exits 0 even when it stores nothing. The recipe still
+      # runs. A poll can skip only on an exact hit, so a nightly that was
+      # never stored cannot be skipped. A same-job re-read is not used: it
+      # can miss a key that a later poll would see.
+      - name: Save the attempt marker
+        if: steps.prior.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/nightly-attempt
+          key: nightly-attempted-${{ needs.new-nightly.outputs.tag }}
       - name: Download and verify the LastDB nightly
         env:
           GH_TOKEN: ${{ github.token }}
-          LASTDB_RELEASE: ${{ inputs.lastdb_release }}
+          LASTDB_RELEASE: ${{ needs.new-nightly.outputs.tag }}
         run: |
           set -euo pipefail
           tag="$LASTDB_RELEASE"
-          if [ -z "$tag" ]; then
-            tag="$(gh api 'repos/EdgeVector/lastdb/releases?per_page=30' \
-              --jq '[.[] | select(.draft == false and (.tag_name | startswith("nightly-")))] | sort_by(.published_at) | last | .tag_name')"
-          fi
           [[ "$tag" =~ ^nightly-[0-9]{8}-[0-9a-f]{9}$ ]]
           release="$RUNNER_TEMP/lastdb-release"
           mkdir -m 700 "$release"
@@ -208,3 +311,37 @@ jobs:
           esac
           export PYTHONPATH="$GITHUB_WORKSPACE/ci/lib"
           python3 "ci/$recipe.py" --bin-dir "$LASTDB_BIN" --version "$LASTDB_VERSION"
+
+  # LastDB's notify-scheduled-failure.yml checks out the caller and runs
+  # scripts/ci/notify_scheduled_failure.py, which accepts only EdgeVector/lastdb.
+  # This job is that same issue lifecycle for People.
+  notify:
+    name: Notify on failure
+    needs: [recipe-syntax, new-nightly, sharing]
+    if: >-
+      always() &&
+      !cancelled() &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'schedule' || github.event_name == 'push') &&
+      (needs.recipe-syntax.result == 'failure' ||
+       needs.new-nightly.result == 'failure' ||
+       needs.sharing.result == 'failure' ||
+       needs.sharing.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Open, update, or close the workflow issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_FILE: dev-sharing.yml
+          JOB_RESULTS: ${{ needs.recipe-syntax.result }} ${{ needs.new-nightly.result }} ${{ needs.sharing.result }}
+          SHARING_RESULT: ${{ needs.sharing.result }}
+          NIGHTLY_TAG: ${{ needs.new-nightly.outputs.tag }}
+        run: python3 ci/notify_scheduled_failure.py

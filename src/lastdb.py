@@ -20,6 +20,7 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+import time
 
 
 class PeopleError(Exception):
@@ -43,6 +44,43 @@ def error_detail(body):
     if isinstance(error, dict):
         return error.get("code"), error.get("message") or error.get("code")
     return error, error
+
+
+# The only 503 People treats as "the cloud cannot confirm this yet".
+# LastDB at nightly 7c389d44f maps every failed member list, including the
+# cloud's not-found for a mutation log head that create has not uploaded,
+# to this sentence (config.rs set_config / read_config, database_share.rs).
+# A settings refusal keeps the service text, so it does not match.
+SHARE_UNCONFIRMED = "share configuration is not confirmed"
+SHARE_CONFIRM_SECONDS = 120
+
+
+def share_configuration_unconfirmed(error):
+    """True only when the reply is that exact 503 sentence."""
+    return (isinstance(error, LastDBError) and error.status == 503
+            and str(error).endswith(f"({SHARE_UNCONFIRMED})"))
+
+
+def call_until_share_confirmed(operation):
+    """Call until the share configuration can be confirmed, or 120 seconds pass.
+
+    The wait is only for `share configuration is not confirmed`. Another
+    status, another 503, and a transport error all surface at once. When
+    the wait ends, the last 503 is raised unchanged.
+    """
+    deadline = time.monotonic() + SHARE_CONFIRM_SECONDS
+    pause = 0.5
+    while True:
+        try:
+            return operation()
+        except LastDBError as error:
+            if not share_configuration_unconfirmed(error):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(pause, remaining))
+            pause = min(pause * 2, 5)
 
 
 class LocalConnection(http.client.HTTPConnection):

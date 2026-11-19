@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 from uuid import uuid4
 
-from lastdb import LastDBError, PeopleError
+from lastdb import LastDBError, PeopleError, call_until_share_confirmed
 
 
 SHARED_ALBUMS = "shared-albums"
@@ -142,19 +142,28 @@ class Setups:
         return verified
 
     def ensure_member_writes(self, database_id, expected):
-        """Send the setup map after the schemas exist. A settings-only change does not use apply()."""
+        """Send the setup map after the schemas exist. A settings-only change does not use apply().
+
+        Create answers ready before the cloud has a mutation log head. Until
+        that head exists, the share configuration read and this write both
+        answer the unconfirmed 503. The same body is sent again: a lost
+        answer must not sign a second statement.
+        """
         if expected is None:
             return
-        current = self.node.databases("share_config", database=database_id)
+        current = call_until_share_confirmed(
+            lambda: self.node.databases("share_config", database=database_id))
         if current.get("memberWrites") == expected:
             return
         request_id = str(uuid4())
-        ack = self.node.databases("set_share_config", database=database_id, config={
+        config = {
             "expectedRevision": current["revision"],
             "requestId": request_id,
             "members": current.get("members") or [],
             "memberWrites": expected,
-        })
+        }
+        ack = call_until_share_confirmed(
+            lambda: self.node.databases("set_share_config", database=database_id, config=config))
         if (ack.get("databaseId") != database_id or ack.get("requestId") != request_id
                 or ack.get("committed") is not True):
             raise PeopleError("LastDB returned a mismatched sharing acknowledgement")
@@ -165,7 +174,8 @@ class Setups:
         row = next((item for item in self.sharing.databases() if item["id"] == database_id), None)
         if row is None or row.get("kind") != "shareable":
             return
-        current = self.node.databases("share_config", database=database_id)
+        current = call_until_share_confirmed(
+            lambda: self.node.databases("share_config", database=database_id))
         if current.get("memberWrites") != expected:
             raise PeopleError("the member-write map does not match the setup")
 

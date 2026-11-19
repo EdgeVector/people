@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from uuid import uuid4
 
 from node import Connection
 from support import OperationError, decode_json, require, retry, summary
@@ -104,6 +105,18 @@ def launcher_env(node):
     return env
 
 
+def command_streams(result):
+    """Decoded stderr and stdout. failure() redacts this pair and keeps the tail."""
+    def text(value):
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode(errors="replace")
+        return value
+
+    return (text(result.stderr), text(result.stdout))
+
+
 def sdk(node, action, **body):
     # The People client is this checkout's. LASTDB_APP_SDK holds the packed LastDB data client.
     require(Path(node.programs.environment.get("LASTDB_APP_SDK", ""), "dist/index.js").is_file(),
@@ -112,7 +125,8 @@ def sdk(node, action, **body):
         ["node", str(ROOT / "ci/people_sdk.mjs"), action, *command(node)],
         input=json.dumps(body).encode(), capture_output=True, env=launcher_env(node), timeout=190,
     )
-    require(result.returncode == 0, f"people_sdk_{action}")
+    if result.returncode != 0:
+        raise OperationError(f"people_sdk_{action}", command_output=command_streams(result))
     return decode_json(result.stdout)
 
 
@@ -153,18 +167,20 @@ def people(node, *arguments, stdin=None, refusal=None, refusals=()):
                                 input=None if stdin is None else json.dumps(stdin).encode(),
                                 capture_output=True, env=launcher_env(node), timeout=180)
     except subprocess.TimeoutExpired as error:
-        raise OperationError(f"people_{label}_deadline") from error
+        raise OperationError(f"people_{label}_deadline", command_output=command_streams(error)) from error
+    output = command_streams(result)
     if refusal is not None:
-        require(result.returncode == 1 and not result.stdout and refusal in result.stderr,
-                f"people_{label}_expected_refusal")
+        if not (result.returncode == 1 and not result.stdout and refusal in result.stderr):
+            raise OperationError(f"people_{label}_expected_refusal", command_output=output)
         return None
     if result.returncode:
-        # An invitation is held in memory and must never enter workflow output.
+        # A known fragment selects the code. The same output is still the detail.
         for fragment, code in refusals:
-            require(fragment.encode() not in result.stderr, code)
-        detail = result.stderr.decode(errors="replace").partition(" returned HTTP ")[2][:3]
-        suffix = f"_http_{detail}" if detail.isascii() and detail.isdigit() else ""
-        raise OperationError(f"people_{label}_failed{suffix}")
+            if fragment.encode() in result.stderr:
+                raise OperationError(code, command_output=output)
+        status = output[0].partition(" returned HTTP ")[2][:3]
+        suffix = f"_http_{status}" if status.isascii() and status.isdigit() else ""
+        raise OperationError(f"people_{label}_failed{suffix}", command_output=output)
     return decode_json(result.stdout)
 
 
@@ -294,13 +310,30 @@ def read_album(node, selections, database, key, title=None):
                for page in pages)
 
 
-def observe_access(node, database, state, revision=None, *, role="read", write_schemas=None):
+def extend_member_writes(node, database, extra):
+    """Add behaviours for schemas that are not part of the setup file."""
+    current = content(node, "people", "GET", f"/api/databases/{database}/share/config")
+    member_writes = {**(current.get("memberWrites") or {}), **extra}
+    if current.get("memberWrites") == member_writes:
+        return member_writes
+    request_id = str(uuid4())
+    ack = content(node, "people", "PUT", f"/api/databases/{database}/share/config", {
+        "expectedRevision": current["revision"], "requestId": request_id,
+        "members": current.get("members") or [], "memberWrites": member_writes,
+    })
+    require(ack.get("committed") is True and ack.get("requestId") == request_id, "circle_member_writes")
+    return member_writes
+
+
+def observe_access(node, database, state, revision=None, *, role="read", write_schemas=None,
+                   member_writes=None):
     def matches(result):
         access = result["database"]["selfAccess"]
         return (access["state"] == state and access["confirmedAtMs"] and not access["stale"]
                 and (revision is None or access["revision"] == str(revision))
                 and (state != "active" or access["role"] == role)
-                and (write_schemas is None or access.get("writeSchemas") == write_schemas))
+                and (write_schemas is None or access.get("writeSchemas") == write_schemas)
+                and (member_writes is None or access.get("memberWrites") == member_writes))
     retry(f"people_recipient_access_{state}", lambda: people(node, "db", "show", database), matches)
 
 

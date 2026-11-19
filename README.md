@@ -278,9 +278,41 @@ It ships with People, so it always matches the installed commands.
 A pull request gets syntax, manifest and command-grammar checks
 (`.github/workflows/ci-required.yml`). It never receives cloud credentials.
 
-Every push to `main` then runs `.github/workflows/dev-sharing.yml`. It also
-runs daily at 09:23 UTC, after the LastDB nightly is published, and can be
-dispatched by hand. `people-direct` starts four fresh LastDB nodes. The
+`.github/workflows/dev-sharing.yml` runs on `main` in four ways:
+
+- Every push to `main`.
+- An hourly poll at minute 41 UTC (`41 * * * *`). The poll selects the newest
+  published LastDB nightly: a release of `EdgeVector/lastdb` whose tag matches
+  `nightly-YYYYMMDD-<9 hex characters>` and is not a draft. If a sharing job
+  on `main` has already started for that tag, the poll skips the sharing jobs
+  and finishes green. "Already attempted" means started, not green. The
+  sharing job checks out this commit, then saves an Actions cache entry
+  `nightly-attempted-<tag>` before it downloads the nightly. A later poll
+  treats an exact cache hit as attempted. A red
+  nightly is not repeated every hour. A poll cancelled while it is still
+  pending never starts sharing, so it does not save the entry and the next
+  poll tries again. The daily run, a push, a manual dispatch, and a re-run
+  of a poll ignore this rule and always start sharing.
+- Every day at 09:23 UTC (`23 9 * * *`).
+- A manual dispatch from `main`. Leave `lastdb_release` empty to use the
+  newest published nightly, or set it to a tag.
+
+Push runs and the daily run also use the newest published nightly.
+
+To re-run a red nightly by hand:
+
+```
+gh workflow run dev-sharing.yml -R EdgeVector/people --ref main -f mode=all -f lastdb_release=<tag>
+```
+
+A red run on `main` from a schedule or a push opens or updates one GitHub
+issue in this repository. The issue is labeled `scheduled-failure`, assigned
+to `shiba4life`, and titled `Scheduled failure: DEV sharing`. A later
+schedule or push run whose sharing jobs succeed closes it. An hourly poll
+that skips sharing does not close it. A manual dispatch does not open or
+close it.
+
+`people-direct` starts four fresh LastDB nodes. The
 other modes start two, a publisher and a recipient. The nodes come from the
 newest published LastDB nightly. The publisher connects to the DEV cloud.
 The recipe drives this commit's `people` command through the launcher, on
@@ -305,4 +337,3 @@ Two things come from `EdgeVector/lastdb`: the endpoint profile
 `ci/people_sdk.mjs` uses to read shared records. Both are taken at the
 nightly's exact source commit. The People client the recipes exercise is this
 repo's `client/`.
-Pass `lastdb_release` to a manual run to use a specific nightly tag.

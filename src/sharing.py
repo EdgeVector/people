@@ -8,7 +8,7 @@ import json
 import time
 import uuid
 
-from lastdb import LastDBError, PeopleError
+from lastdb import LastDBError, PeopleError, call_until_share_confirmed
 
 
 SPEC = {"name": "social", "version": 1}
@@ -168,13 +168,16 @@ class Sharing:
         wire = {key: update[key] for key in ("expectedRevision", "requestId", "members")}
         for attempt in range(3):
             try:
-                ack = self.node.databases("set_share_config", database=database_id, config=wire)
-            except (LastDBError, *TRANSPORT_ERRORS) as error:
-                if isinstance(error, LastDBError) and error.status != 503:
-                    raise
+                # The same unconfirmed 503 as a fresh database: the cloud has
+                # no head yet. Any other refusal, including a different 503,
+                # is final. A dropped connection still gets the short retry.
+                ack = call_until_share_confirmed(
+                    lambda: self.node.databases("set_share_config", database=database_id, config=wire))
+            except TRANSPORT_ERRORS:
                 if attempt == 2:
                     raise
                 time.sleep(attempt + 1)
+                continue
             else:
                 if (ack["databaseId"] != database_id or ack["requestId"] != update["requestId"]
                         or ack["committed"] is not True

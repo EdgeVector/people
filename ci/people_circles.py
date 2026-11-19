@@ -6,11 +6,19 @@ import os
 import sys
 import uuid
 
+from circle_comments import (
+    exercise_comment_ownership, exercise_reader, exercise_upgrade, queue_and_restart, verify_results,
+    verify_settled_retry,
+)
+from circle_report import (
+    attach, cell, check, fail, mark, require_absent, saw, wait, wait_field,
+)
+from direct_nodes import clip_public
 from node import Connection
-from people_app import expect_setup_member_writes_pending, extend_member_writes, install, observe_access, owned_item, pick, read_records, sdk, people, write_owned
+from people_app import expect_setup_member_writes_pending, extend_member_writes, install, observe_access, read_records, sdk, people, write_owned
 from people_declarations import configure_bindings, external_changes, independent_update, revoke_roster
-from people_log_views import inbox, pending_positions, published_views, scope_for
-from support import OperationError, decode_json, require, retry, run_operation, summary
+from people_log_views import scope_for
+from support import OperationError, decode_json, run_operation, summary
 
 SCOPE = {"name": "whole-database", "version": 1}
 ALBUM = "dev-albums/Album"
@@ -56,9 +64,8 @@ def query(node, database, schema, key):
     return read_records(node, database, schema, [key])
 
 
-def wait_text(node, database, schema, key, text, stage):
-    retry(stage, lambda: query(node, database, schema, key),
-          lambda rows: len(rows) == 1 and rows[0]["fields"]["text"] == text)
+def wait_text(name, node, database, schema, key, text, stage):
+    wait_field(name, stage, lambda: query(node, database, schema, key), "text", text)
 
 
 def submit(node, database, update, *, mutation_id=None):
@@ -68,23 +75,44 @@ def submit(node, database, update, *, mutation_id=None):
             "Content-Type": "application/json", "Idempotency-Key": mutation_id,
         })
         with connection.getresponse() as reply:
-            require(reply.status == 202, f"circle_submission_http_{reply.status}_expected_202")
-            body = decode_json(reply.read(65537))
+            raw = reply.read(65537)
+            if reply.status != 202:
+                fail("circle_submission_http_%s_expected_202" % reply.status,
+                     "status=%s head=%s" % (reply.status, _head(raw)))
+            body = decode_json(raw)
     sequence = body.get("submission_sequence")
-    require(body.get("ok") is True and body.get("mutation_id") == mutation_id
-            and body.get("status") == "submitted" and type(sequence) is int and sequence > 0,
-            "circle_submission_receipt")
+    check(body.get("ok") is True and body.get("mutation_id") == mutation_id
+          and body.get("status") == "submitted" and type(sequence) is int and sequence > 0,
+          "circle_submission_receipt",
+          saw("receipt", ok=body.get("ok"), status=body.get("status"), id_match=body.get("mutation_id") == mutation_id,
+              sequence=sequence if type(sequence) is int else None))
     return mutation_id
+
+
+def _head(raw):
+    return clip_public(raw.decode("utf-8", "replace").split("\n", 1)[0], 60)
 
 
 def transfer(programs, root, publisher, recipient, api_key):
     name = f"ci-circles-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+    state = {"database": None}
+    roster = [("publisher", publisher), ("Ana", recipient)]
+    try:
+        _transfer(programs, root, publisher, recipient, api_key, name, state)
+    except OperationError as error:
+        attach(error, roster, state["database"])
+        raise
+
+
+def _transfer(programs, root, publisher, recipient, api_key, name, state):
     if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
     expect_setup_member_writes_pending(recipient, f"{name}-offline")
     created = sdk(publisher, "create-shared", name=name)
-    require(created["sharingMode"] == "whole_database" and created["name"] == name, "circle_sdk_create")
+    check(created["sharingMode"] == "whole_database" and created["name"] == name, "circle_sdk_create",
+          saw("create", mode=created.get("sharingMode"), name_match=created.get("name") == name))
     database = created["id"]
+    state["database"] = database
     report(f"Owned DEV mutation log {database} for {name} through the packaged SDK.")
     second = create_database(publisher, f"{name}-second")
     definitions = {schema: declare(publisher, database, schema) for schema in (ALBUM, COMMENT)}
@@ -100,17 +128,18 @@ def transfer(programs, root, publisher, recipient, api_key):
     contact = root / "recipient.contact"
     reader = programs.command(recipient.home, ["share", "contact", "--out", str(contact)])["recipient_public_key"]
     sender = programs.command(publisher.home, ["share", "contact", "--out", str(root / "owner.contact")])["recipient_public_key"]
-    require(reader != sender, "circle_two_identities")
+    check(reader != sender, "circle_two_identities", saw("keys", distinct=reader != sender))
     people(publisher, "person", "add", "Ana", "--node-key", reader, "--contact", str(contact), refusals=REFUSALS)
-    retry("circle_cloud_ready", lambda: people(publisher, "db", "show", database),
-          lambda row: row["sharing"].get("revision") == "0")
+    wait_cloud("circle_cloud_ready", publisher, database)
     placed = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
-    require(placed["databaseId"] == database and placed["memberWrites"] != "pending", "circle_setup_finish")
+    check(placed["databaseId"] == database and placed["memberWrites"] != "pending", "circle_setup_finish",
+          saw("setup", id_match=placed.get("databaseId") == database, pending=placed.get("memberWrites") == "pending"))
     definitions.update(placed["definitions"])
     member_writes = extend_member_writes(publisher, database, {COMMENT: "shared", ALBUM: "owner_only"})
-    require(set(definitions).issubset(people(publisher, "db", "show", database)["schemas"]), "circle_schema_catalog_missing")
-    retry("circle_second_cloud_ready", lambda: people(publisher, "db", "show", second),
-          lambda row: row["sharing"].get("revision") == "0")
+    shown = set(people(publisher, "db", "show", database)["schemas"])
+    check(set(definitions).issubset(shown), "circle_schema_catalog_missing",
+          saw("schemas", missing=len(set(definitions) - shown)))
+    wait_cloud("circle_second_cloud_ready", publisher, second)
     try:
         share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender, member_writes)
     finally:
@@ -129,19 +158,22 @@ def transfer(programs, root, publisher, recipient, api_key):
 def share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender, member_writes):
     created = edit_circle(publisher)
     circle = created["circle"]
-    require(revisions(created) == {} and circle["name"] == "Family" and not circle["members"]
-            and not circle["links"], "circle_starts_as_private_membership")
+    check(revisions(created) == {} and circle["name"] == "Family" and not circle["members"]
+          and not circle["links"], "circle_starts_as_private_membership",
+          saw("circle", revisions=len(revisions(created)), name=circle.get("name"),
+              members=bool(circle.get("members")), links=bool(circle.get("links"))))
     configure_bindings(publisher, circle, database, second, COMMENT_GRANT["names"])
-    require(revisions(edit_circle(publisher, "--members", reader)) == {database: "1", second: "1"},
-            "circle_grant_revisions")
+    same_revisions(edit_circle(publisher, "--members", reader), {database: "1", second: "1"}, "circle_grant_revisions")
     receipt = sdk(publisher, "seal", database=database, nodeKey=reader)
-    require(receipt["publisher"] == sender and receipt["databaseId"] == database
-            and receipt["revision"] == "1", "circle_sdk_sealed_invitation")
+    check(receipt["publisher"] == sender and receipt["databaseId"] == database and receipt["revision"] == "1",
+          "circle_sdk_sealed_invitation",
+          saw("seal", publisher=receipt.get("publisher") == sender, database=receipt.get("databaseId") == database,
+              revision=receipt.get("revision")))
     exercise(publisher, recipient, database, receipt, definitions, scope, member_writes)
     exercise_comment_ownership(publisher, recipient, database, definitions, scope, reader)
     second_receipt = people(publisher, "invite", second, reader)
     people(recipient, "db", "accept", "--publisher", sender, "--name", "second", stdin=second_receipt)
-    wait_text(recipient, second, COMMENT, "seed", "Second database", "circle_second_database_read")
+    wait_text("Ana", recipient, second, COMMENT, "seed", "Second database", "circle_second_database_read")
     observe_access(recipient, second, "active", 1)
     definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT], scope, member_writes)
     read_links = ("--link", f"{database}=read", "--link", f"{second}={COMMENT}")
@@ -149,8 +181,7 @@ def share_with_circle(publisher, recipient, database, second, definitions, scope
     people(publisher, "grant", "revoke", second, reader, "--apply")
     people(publisher, "circle", "set", "Family", *read_links, "--apply", "--token", preview["token"],
            refusal=b"sharing changed since the preview")
-    require(revisions(edit_circle(publisher, *read_links)) == {database: "2", second: "2"},
-            "circle_reader_revision")
+    same_revisions(edit_circle(publisher, *read_links), {database: "2", second: "2"}, "circle_reader_revision")
     observe_access(recipient, second, "revoked")
     exercise_reader(publisher, recipient, database, definitions, scope)
     external_changes(publisher, circle, database, reader)
@@ -171,9 +202,10 @@ def report(message):
 def edit_circle(owner, *arguments):
     edit = ("circle", "set", "Family", *arguments)
     preview = people(owner, *edit, refusals=REFUSALS)
-    require(all("error" not in row for row in preview["databases"]), "circle_reusable_preview")
+    errors = sum(1 for row in preview["databases"] if "error" in row)
+    check(errors == 0, "circle_reusable_preview", saw("preview", errors=errors))
     response = people(owner, *edit, "--apply", "--token", preview["token"], refusals=REFUSALS)
-    require(not response["pending"], "circle_reusable_apply")
+    check(not response["pending"], "circle_reusable_apply", saw("apply", pending=bool(response.get("pending"))))
     return response
 
 
@@ -181,12 +213,29 @@ def revisions(response):
     return {row["databaseId"]: row["revision"] for row in response["databases"]}
 
 
+def same_revisions(response, expected, code):
+    found = revisions(response)
+    values = ".".join(sorted(str(item) for item in found.values()))
+    check(found == expected, code, saw("revisions", match=found == expected, values=values))
+
+
+def wait_cloud(stage, node, database):
+    wait(stage, lambda: people(node, "db", "show", database), lambda row: _sharing_revision(row) == "0",
+         lambda row, reason: saw(reason, revision=_sharing_revision(row)))
+
+
+def _sharing_revision(row):
+    sharing = row.get("sharing") if isinstance(row, dict) else None
+    return sharing.get("revision") if isinstance(sharing, dict) else None
+
+
 def cleanup(publisher, database):
     roster = people(publisher, "db", "show", database, refusals=REFUSALS)["sharing"]
     if roster.get("status") == "pending":
         people(publisher, "db", "retry", database, refusals=REFUSALS)
         roster = people(publisher, "db", "show", database, refusals=REFUSALS)["sharing"]
-    require(roster.get("members") is not None, "circle_cleanup_roster_unavailable")
+    check(roster.get("members") is not None, "circle_cleanup_roster_unavailable",
+          saw("roster", status=roster.get("status"), members=roster.get("members") is not None))
     revoke_roster(publisher, database)
     report("ExeMem confirmed the final recipient revocations.")
 
@@ -196,24 +245,30 @@ def connect(programs, publisher, api_key):
         "backup", "connect", "--existing", "--env", "dev", "--api-key-stdin",
         "--expected-user-hash", publisher.account, "--json",
     ], input_bytes=api_key, timeout=20)
-    require(receipt["environment"] == "dev" and receipt["account_id"] == publisher.account
-            and receipt["credentials_saved"] is True, "circle_dev_connection")
+    check(receipt["environment"] == "dev" and receipt["account_id"] == publisher.account
+          and receipt["credentials_saved"] is True, "circle_dev_connection",
+          saw("connect", env=receipt.get("environment"), account=receipt.get("account_id") == publisher.account,
+              saved=receipt.get("credentials_saved")))
 
 
 def exercise(publisher, recipient, database, receipt, definitions, scope, member_writes):
     accepted = sdk(recipient, "accept", receipt=receipt, publisher=receipt["publisher"], name="family")
-    require(accepted["id"] == database and accepted["sharingMode"] == "whole_database", "circle_received_database")
+    check(accepted["id"] == database and accepted["sharingMode"] == "whole_database", "circle_received_database",
+          saw("accept", id_match=accepted.get("id") == database, mode=accepted.get("sharingMode")))
     for schema in (ALBUM, COMMENT):
-        wait_text(recipient, database, schema, "seed", f"Initial {schema}", "circle_whole_database_read")
+        wait_text("Ana", recipient, database, schema, "seed", f"Initial {schema}", "circle_whole_database_read")
     album = sdk(recipient, "read", database=database, schema=ALBUM, key="seed")
     second_app = sdk(recipient, "read", database=database, schema=ALBUM, key="seed", appId="album-viewer")
-    require(second_app == album, "independent_app_opens_same_published_album")
-    require(album["fields"]["text"] == f"Initial {ALBUM}", "circle_sdk_read_shared_content")
+    check(second_app == album, "independent_app_opens_same_published_album",
+          "%s %s" % (cell("Ana", album, "text"), cell("viewer", second_app, "text")))
+    check(album["fields"]["text"] == f"Initial {ALBUM}", "circle_sdk_read_shared_content", cell("Ana", album, "text"))
     report("The packaged SDK used People to create a whole-database share, seal a circle invitation and accept it. The recipient read shared data through the LastDB SDK.")
     observe_access(recipient, database, "active", 1, role="submit", member_writes=member_writes)
     sdk_access = next(row for row in sdk(recipient, "list-databases") if row["id"] == database)["selfAccess"]
-    require(sdk_access["state"] == "active" and sdk_access["stale"] is False and sdk_access["role"] == "submit"
-            and sdk_access.get("memberWrites") == member_writes, "circle_sdk_confirmed_grant")
+    check(sdk_access["state"] == "active" and sdk_access["stale"] is False and sdk_access["role"] == "submit"
+          and sdk_access.get("memberWrites") == member_writes, "circle_sdk_confirmed_grant",
+          saw("grant", state=sdk_access.get("state"), role=sdk_access.get("role"), stale=sdk_access.get("stale"),
+              writes=sdk_access.get("memberWrites") == member_writes))
     created = mutation(COMMENT, definitions[COMMENT], "allowed", "From Ana")
     created["metadata"] = {"share_author": "unverified-author"}
     updates = [
@@ -225,175 +280,13 @@ def exercise(publisher, recipient, database, receipt, definitions, scope, member
                                check_status=True)
     verify_results(recipient, database, queued)
     verify_settled_retry(publisher, recipient, database, scope, updates[1], queued[1])
-    for node in (publisher, recipient):
-        wait_text(node, database, COMMENT, "allowed", "From Ana", "circle_authorized_write_applied")
-        require(not query(node, database, ALBUM, "blocked"), "circle_forbidden_write_missing")
-        wait_text(node, database, COMMENT, "seed", f"Initial {COMMENT}", "circle_invalid_create_discarded")
+    for name, node in (("publisher", publisher), ("Ana", recipient)):
+        wait_text(name, node, database, COMMENT, "allowed", "From Ana", "circle_authorized_write_applied")
+        require_absent(name, query(node, database, ALBUM, "blocked"), "circle_forbidden_write_missing", "text")
+        wait_text(name, node, database, COMMENT, "seed", f"Initial {COMMENT}", "circle_invalid_create_discarded")
     message = "The publisher kept Ana's Comment and discarded the Album write and the create that targeted the seed."
     print(message, flush=True)
     summary(message)
-
-
-def standard_comment(database, definition, key, text, author):
-    update = mutation(STANDARD_COMMENT, definition, key, text)
-    update["key_value"] = {"hash": "seed-album", "range": key}
-    update["record"] = {
-        "target": {"database": database, "schema": ALBUM, "key": "seed"},
-        "author_id": author,
-        "created_at": "2026-11-14T00:00:00Z",
-        "social_comment_text": text,
-    }
-    return update
-
-
-def standard_rows(node, database):
-    rows = read_records(node, database, STANDARD_COMMENT, [
-        {"hash": "seed-album", "range": "publisher"}, {"hash": "seed-album", "range": "receiver"},
-    ])
-    return {row["key"]["range"]: row for row in rows}
-
-
-def texts(rows):
-    return {key: row["fields"]["social_comment_text"] for key, row in rows.items()}
-
-
-def replace_comment(update, row, text):
-    return {
-        **update, "mutation_type": "replace", "expected": {"type": "revision", "revision": row["revision"]},
-        "record": {**row["fields"], "social_comment_text": text},
-    }
-
-
-def member_author(row, node_key, author_field, code):
-    require(row.get("created_by") == node_key and row.get("updated_by") == node_key and row["fields"]["author_id"] == author_field, code)
-
-
-def refuse_created_by(node, database, definition):
-    update = standard_comment(database, definition, "forged-author", "Refused", "spoofed-author")
-    inside, named = owned_item(database, update), owned_item(database, update)
-    inside["record"] = {**inside["record"], "created_by": "forged"}
-    named["created_by"] = "forged"
-    for item in (inside, named):
-        try:
-            node.call("/v1/write", {"mutations": [item]})
-        except OperationError as error:
-            require((error.socket_refusal or {}).get("status") == 400, "created_by_write_refused")
-        else:
-            require(False, "created_by_write_refused")
-
-
-def exercise_comment_ownership(publisher, recipient, database, definitions, scope, reader):
-    definition = definitions[STANDARD_COMMENT]
-    owner_comment = standard_comment(database, definition, "publisher", "Publisher wrote this", reader)
-    mine = standard_comment(database, definition, "receiver", "Ana wrote this", "spoofed-author")
-    refuse_created_by(publisher, database, definition)
-    write_owned(publisher, database, owner_comment)
-    queue_and_restart(publisher, recipient, database, scope, 1, [mine])
-    expected = {"publisher": "Publisher wrote this", "receiver": "Ana wrote this"}
-    for node in (publisher, recipient):
-        rows = retry("standard_comments_visible", lambda: standard_rows(node, database),
-                     lambda rows: texts(rows) == expected)
-        member_author(rows["receiver"], reader, "spoofed-author", "standard_verified_author")
-        require(rows["publisher"].get("created_by") not in (None, reader), "standard_author_field_is_not_creator")
-    current = standard_rows(publisher, database)["receiver"]
-    write_owned(publisher, database, replace_comment(mine, current, "Moderated by publisher"))
-    expected["receiver"] = "Moderated by publisher"
-    rows = retry("standard_publisher_edit_visible", lambda: standard_rows(recipient, database),
-                 lambda rows: texts(rows) == expected)
-    edit = replace_comment(mine, rows["receiver"], "Edited by Ana")
-    edit["record"]["author_id"] = "spoofed-editor"
-    cross_author = replace_comment(owner_comment, rows["publisher"], "Forbidden edit")
-    queue_and_restart(publisher, recipient, database, scope, 1, [cross_author, edit])
-    expected["receiver"] = "Edited by Ana"
-    for node in (publisher, recipient):
-        rows = retry("standard_comment_edit_applied", lambda: standard_rows(node, database),
-                     lambda rows: texts(rows) == expected)
-        member_author(rows["receiver"], reader, "spoofed-editor", "standard_edited_author_unchanged")
-    current = standard_rows(publisher, database)["receiver"]
-    delete = {**mine, "mutation_type": "delete", "record": {}, "expected": {"type": "revision", "revision": current["revision"]}}
-    album = mutation("social/Album", definitions["social/Album"], "member-album", "")
-    album["record"] = {"title": "Not allowed", "description": "Member write", "cover_photo_id": "none", "created_at": "2026-11-14T00:00:00Z"}
-    queue_and_restart(publisher, recipient, database, scope, 1, [delete, album])
-    expected.pop("receiver")
-    for node in (publisher, recipient):
-        rows = retry("standard_own_delete_applied", lambda: standard_rows(node, database), lambda rows: texts(rows) == expected and not query(node, database, "social/Album", "member-album"))
-    report("Ana edited and deleted her own comment. The publisher discarded her edit of the publisher's comment and her Album write.")
-
-
-def exercise_upgrade(publisher, recipient, database, previous, scope, member_writes):
-    new = declare(publisher, database, COMMENT, expanded=True)
-    require(new != previous, "circle_schema_upgrade_new_definition")
-    seeded = mutation(COMMENT, new, "upgrade", "Before edit")
-    seeded["record"]["caption"] = "Keep the optional field"
-    write_owned(publisher, database, seeded)
-    wait_text(recipient, database, COMMENT, "upgrade", "Before edit", "circle_upgraded_record_received")
-    observe_access(recipient, database, "active", 1, role="submit", member_writes=member_writes)
-    current = query(recipient, database, COMMENT, "upgrade")[0]
-    update = mutation(COMMENT, new, "upgrade", "After edit")
-    update.update(mutation_type="replace", expected={"type": "revision", "revision": current["revision"]},
-                  record={**current["fields"], "text": "After edit"},
-                  source_file_name="replacement.txt", metadata={"share_author": "replacement-author"})
-    stale = {**update, "record": {**update["record"], "text": "Stale edit"}}
-    queue_and_restart(publisher, recipient, database, scope, 1, [update, stale])
-    for node in (publisher, recipient):
-        wait_text(node, database, COMMENT, "upgrade", "After edit", "circle_upgraded_record_edited")
-        require(query(node, database, COMMENT, "upgrade")[0]["fields"] == update["record"],
-                "circle_upgraded_fields_preserved")
-        wait_text(node, database, COMMENT, "allowed", "From Ana", "circle_old_records_preserved")
-    report("Ana edited the upgraded Comment at the same sharing revision. The added field and the older record remained. The publisher discarded the stale edit.")
-    return new
-
-
-def exercise_reader(publisher, recipient, database, definitions, scope):
-    observe_access(recipient, database, "active", 2)
-    wait_text(recipient, database, COMMENT, "allowed", "From Ana", "circle_reader_retains_access")
-    updates = [mutation(COMMENT, definitions[COMMENT], "reader", "Reader submission")]
-    queue_and_restart(publisher, recipient, database, scope, 2, updates)
-    for node in (publisher, recipient):
-        require(not query(node, database, COMMENT, "reader"), "circle_reader_write_discarded")
-    message = "Ana submitted with an empty write scope. The publisher consumed the entry and published no record."
-    print(message, flush=True)
-    summary(message)
-
-
-def verify_results(recipient, database, queued):
-    unknown = str(uuid.uuid4())
-    results = sdk(recipient, "submission-status", database=database, ids=[*queued, unknown])
-    require([row["status"] for row in results] == ["discarded", "published", "discarded", "unknown"],
-            "circle_sdk_final_proposal_results")
-    report("The receiving SDK read the final outcome of each of Ana's proposals by UUID.")
-
-
-def verify_settled_retry(publisher, recipient, database, scope, update, mutation_id):
-    pending = inbox(publisher, scope, database, 1)
-    require(not pending["entries"], "circle_retry_starts_with_settled_inbox")
-    published = published_views(recipient, scope, database, 1)
-    require(pick(recipient, SCOPE, "write", database)["databaseId"] == database, "circle_picker_write")
-    submit(recipient, database, update, mutation_id=mutation_id)
-    results = sdk(recipient, "submission-status", database=database, ids=[mutation_id])
-    require([row["status"] for row in results] == ["published"], "circle_retry_preserves_outcome")
-    require(inbox(publisher, scope, database, 1) == pending, "circle_retry_does_not_enqueue")
-    require(published_views(recipient, scope, database, 1) == published, "circle_retry_does_not_publish")
-    report("Ana retried a settled mutation with the same UUID and operation. Its published outcome and both log positions stayed the same.")
-
-
-def queue_and_restart(publisher, recipient, database, scope, revision, updates, *, check_status=False):
-    require(pick(recipient, SCOPE, "write", database)["databaseId"] == database, "circle_picker_write")
-    publisher.stop()
-    try:
-        require(not inbox(publisher, scope, database, revision)["entries"], "circle_empty_inbox")
-        published_before = published_views(recipient, scope, database, revision)
-        queued = [submit(recipient, database, update) for update in updates]
-        if check_status:
-            results = sdk(recipient, "submission-status", database=database, ids=queued)
-            require(all(row["status"] == "submitted" for row in results), "circle_sdk_proposals_pending")
-        through = pending_positions(publisher, recipient, scope, database, revision, queued, published_before)
-        summary("ExeMem queued the mutations in the publisher's inbox and refused Ana's inbox read and settlement. The published log did not advance.")
-    finally:
-        publisher.start()
-    retry("circle_publisher_consumed_submissions", lambda: inbox(publisher, scope, database, revision),
-          lambda page: int(page["next"]) >= through and not page["entries"])
-    return queued
 
 
 if __name__ == "__main__":

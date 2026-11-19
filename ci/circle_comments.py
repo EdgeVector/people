@@ -152,12 +152,15 @@ def exercise_reader(publisher, recipient, database, definitions, scope):
     observe_access(recipient, database, "active", 2)
     recipe.wait_text("Ana", recipient, database, recipe.COMMENT, "allowed", "From Ana",
                      "circle_reader_retains_access")
-    updates = [recipe.mutation(recipe.COMMENT, definitions[recipe.COMMENT], "reader", "Reader submission")]
-    queue_and_restart(publisher, recipient, database, scope, 2, updates)
+    update = recipe.mutation(recipe.COMMENT, definitions[recipe.COMMENT], "reader", "Reader submission")
+    recipe.refuse_submission(recipient, database, update)
+    page = inbox(publisher, scope, database, 2)
+    entries = page.get("entries") if isinstance(page, dict) else None
+    check(entries == [], "circle_reader_not_queued", inbox_line(page))
     for name, node in (("publisher", publisher), ("Ana", recipient)):
         require_absent(name, recipe.query(node, database, recipe.COMMENT, "reader"),
                        "circle_reader_write_discarded", "text")
-    recipe.report("Ana submitted with an empty write scope. The publisher consumed the entry and published no record.")
+    recipe.report("Ana's read role was refused with 403. The publisher's inbox did not receive the proposal, and neither node has the reader record.")
 
 
 def verify_results(recipient, database, queued):

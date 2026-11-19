@@ -233,13 +233,11 @@ def num(value):
 
 
 def failure_evidence(roster, database):
-    """Per node: matching daemon lines, then session, prefix, and error files."""
-    parts = []
-    for name, node in roster:
-        try:
-            parts.append("%s %s %s" % (name, log_text(node), sync_files(node, database)))
-        except Exception:
-            parts.append("%s evidence=failed" % name)
+    """Per node: matching daemon lines, then session, prefix, and error files.
+
+    The daemon lines stay when the log-sync file read fails.
+    """
+    parts = [node_evidence(name, node, database) for name, node in roster]
     try:
         cloud = ana_cloud(roster)
     except Exception:
@@ -247,6 +245,18 @@ def failure_evidence(roster, database):
     if cloud:
         parts.append(cloud)
     return "\n".join(parts)[:48000]
+
+
+def node_evidence(name, node, database):
+    try:
+        log = log_text(node)
+    except Exception:
+        log = "log=failed"
+    try:
+        files = sync_files(node, database)
+    except Exception:
+        files = "files=failed"
+    return "%s %s %s" % (name, log, files)
 
 
 def log_text(node):

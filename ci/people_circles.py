@@ -7,7 +7,7 @@ import sys
 import uuid
 
 from node import Connection
-from people_app import SETUP, install, observe_access, owned_item, pick, read_records, sdk, people, write_owned
+from people_app import extend_member_writes, install, observe_access, owned_item, pick, read_records, sdk, people, write_owned
 from people_declarations import configure_bindings, external_changes, independent_update, revoke_roster
 from people_log_views import inbox, pending_positions, published_views, scope_for
 from support import OperationError, decode_json, require, retry, run_operation, summary
@@ -15,7 +15,6 @@ from support import OperationError, decode_json, require, retry, run_operation, 
 SCOPE = {"name": "whole-database", "version": 1}
 ALBUM = "dev-albums/Album"
 COMMENT = "dev-comments/Comment"
-# LastDB applies comment authorship only to this schema name.
 STANDARD_COMMENT = "social/Comment"
 COMMENT_GRANT = {"names": [COMMENT, STANDARD_COMMENT]}
 REFUSALS = (
@@ -63,7 +62,6 @@ def wait_text(node, database, schema, key, text, stage):
 
 
 def submit(node, database, update, *, mutation_id=None):
-    # The member submits on the owner socket. This is not a People command.
     mutation_id = mutation_id or str(uuid.uuid4())
     with closing(Connection(node.socket)) as connection:
         connection.request("POST", f"/api/databases/{database}/submissions", json.dumps(update), {
@@ -88,17 +86,15 @@ def transfer(programs, root, publisher, recipient, api_key):
     database = created["id"]
     report(f"Owned DEV mutation log {database} for {name} through the packaged SDK.")
     second = create_database(publisher, f"{name}-second")
+    placed = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
+    require(placed["databaseId"] == database, "circle_setup_finish")
     definitions = {schema: declare(publisher, database, schema) for schema in (ALBUM, COMMENT)}
-    definition = SETUP / "Comment.json"
-    definitions[STANDARD_COMMENT] = publisher.call(
-        f"/api/databases/{database}/apps/declare-schema", json.loads(definition.read_text())
-    )["definition_id"]
+    definitions.update(placed["definitions"])
+    member_writes = extend_member_writes(publisher, database, {COMMENT: "shared", ALBUM: "owner_only"})
     write_owned(publisher, database, *(
         mutation(schema, definitions[schema], "seed", f"Initial {schema}") for schema in (ALBUM, COMMENT)))
     definition = declare(publisher, second, COMMENT)
     write_owned(publisher, second, mutation(COMMENT, definition, "seed", "Second database"))
-    # Enroll the stopped publisher, then record its connected boot identity.
-    # Enrolling a running node can re-exec it to enable local capture.
     publisher.stop()
     connect(programs, publisher, api_key)
     scope = scope_for(publisher, api_key)
@@ -115,7 +111,7 @@ def transfer(programs, root, publisher, recipient, api_key):
     retry("circle_second_cloud_ready", lambda: people(publisher, "db", "show", second),
           lambda row: row["sharing"].get("revision") == "0")
     try:
-        share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender)
+        share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender, member_writes)
     finally:
         failed = sys.exc_info()[0] is not None
         cleanup_error = None
@@ -129,7 +125,7 @@ def transfer(programs, root, publisher, recipient, api_key):
             raise cleanup_error
 
 
-def share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender):
+def share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender, member_writes):
     created = edit_circle(publisher)
     circle = created["circle"]
     require(revisions(created) == {} and circle["name"] == "Family" and not circle["members"]
@@ -140,13 +136,13 @@ def share_with_circle(publisher, recipient, database, second, definitions, scope
     receipt = sdk(publisher, "seal", database=database, nodeKey=reader)
     require(receipt["publisher"] == sender and receipt["databaseId"] == database
             and receipt["revision"] == "1", "circle_sdk_sealed_invitation")
-    exercise(publisher, recipient, database, receipt, definitions, scope)
-    exercise_comment_ownership(publisher, recipient, database, definitions[STANDARD_COMMENT], scope, reader)
+    exercise(publisher, recipient, database, receipt, definitions, scope, member_writes)
+    exercise_comment_ownership(publisher, recipient, database, definitions, scope, reader)
     second_receipt = people(publisher, "invite", second, reader)
     people(recipient, "db", "accept", "--publisher", sender, "--name", "second", stdin=second_receipt)
     wait_text(recipient, second, COMMENT, "seed", "Second database", "circle_second_database_read")
-    observe_access(recipient, second, "active", 1, write_schemas=[])
-    definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT], scope)
+    observe_access(recipient, second, "active", 1)
+    definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT], scope, member_writes)
     read_links = ("--link", f"{database}=read", "--link", f"{second}={COMMENT}")
     preview = people(publisher, "circle", "set", "Family", *read_links)
     people(publisher, "grant", "revoke", second, reader, "--apply")
@@ -156,7 +152,7 @@ def share_with_circle(publisher, recipient, database, second, definitions, scope
             "circle_reader_revision")
     observe_access(recipient, second, "revoked")
     exercise_reader(publisher, recipient, database, definitions, scope)
-    external_changes(publisher, circle, database, reader, COMMENT)
+    external_changes(publisher, circle, database, reader)
     independent_update(publisher, circle["id"], database, second, reader, COMMENT)
     report("One reusable circle granted distinct access to two databases and preserved an explicit revoke after an edit.")
 
@@ -173,7 +169,6 @@ def report(message):
 
 
 def edit_circle(owner, *arguments):
-    """Preview a change to the Family circle, then apply exactly that preview."""
     edit = ("circle", "set", "Family", *arguments)
     preview = people(owner, *edit, refusals=REFUSALS)
     require(all("error" not in row for row in preview["databases"]), "circle_reusable_preview")
@@ -205,7 +200,7 @@ def connect(programs, publisher, api_key):
             and receipt["credentials_saved"] is True, "circle_dev_connection")
 
 
-def exercise(publisher, recipient, database, receipt, definitions, scope):
+def exercise(publisher, recipient, database, receipt, definitions, scope, member_writes):
     accepted = sdk(recipient, "accept", receipt=receipt, publisher=receipt["publisher"], name="family")
     require(accepted["id"] == database and accepted["sharingMode"] == "whole_database", "circle_received_database")
     for schema in (ALBUM, COMMENT):
@@ -215,11 +210,10 @@ def exercise(publisher, recipient, database, receipt, definitions, scope):
     require(second_app == album, "independent_app_opens_same_published_album")
     require(album["fields"]["text"] == f"Initial {ALBUM}", "circle_sdk_read_shared_content")
     report("The packaged SDK used People to create a whole-database share, seal a circle invitation and accept it. The recipient read shared data through the LastDB SDK.")
-    summary("Ana read the seeded records in both Album and Comment.")
-    observe_access(recipient, database, "active", 1, role="submit", write_schemas=COMMENT_GRANT)
+    observe_access(recipient, database, "active", 1, role="submit", member_writes=member_writes)
     sdk_access = next(row for row in sdk(recipient, "list-databases") if row["id"] == database)["selfAccess"]
-    require(sdk_access["state"] == "active" and sdk_access["stale"] is False
-            and sdk_access["writeSchemas"] == COMMENT_GRANT, "circle_sdk_confirmed_grant")
+    require(sdk_access["state"] == "active" and sdk_access["stale"] is False and sdk_access["role"] == "submit"
+            and sdk_access.get("memberWrites") == member_writes, "circle_sdk_confirmed_grant")
     created = mutation(COMMENT, definitions[COMMENT], "allowed", "From Ana")
     created["metadata"] = {"share_author": "unverified-author"}
     updates = [
@@ -288,8 +282,8 @@ def refuse_created_by(node, database, definition):
             require(False, "created_by_write_refused")
 
 
-def exercise_comment_ownership(publisher, recipient, database, definition, scope, reader):
-    # reader is Ana's node key: recipient_public_key from share contact.
+def exercise_comment_ownership(publisher, recipient, database, definitions, scope, reader):
+    definition = definitions[STANDARD_COMMENT]
     owner_comment = standard_comment(database, definition, "publisher", "Publisher wrote this", reader)
     mine = standard_comment(database, definition, "receiver", "Ana wrote this", "spoofed-author")
     refuse_created_by(publisher, database, definition)
@@ -301,7 +295,6 @@ def exercise_comment_ownership(publisher, recipient, database, definition, scope
                      lambda rows: texts(rows) == expected)
         member_author(rows["receiver"], reader, "spoofed-author", "standard_verified_author")
         require(rows["publisher"].get("created_by") not in (None, reader), "standard_author_field_is_not_creator")
-
     current = standard_rows(publisher, database)["receiver"]
     write_owned(publisher, database, replace_comment(mine, current, "Moderated by publisher"))
     expected["receiver"] = "Moderated by publisher"
@@ -309,25 +302,32 @@ def exercise_comment_ownership(publisher, recipient, database, definition, scope
                  lambda rows: texts(rows) == expected)
     edit = replace_comment(mine, rows["receiver"], "Edited by Ana")
     edit["record"]["author_id"] = "spoofed-editor"
-    delete = {**edit, "mutation_type": "delete", "record": {}}
     cross_author = replace_comment(owner_comment, rows["publisher"], "Forbidden edit")
-    queue_and_restart(publisher, recipient, database, scope, 1, [cross_author, delete, edit])
+    queue_and_restart(publisher, recipient, database, scope, 1, [cross_author, edit])
     expected["receiver"] = "Edited by Ana"
     for node in (publisher, recipient):
-        rows = retry("standard_comment_policy_applied", lambda: standard_rows(node, database),
+        rows = retry("standard_comment_edit_applied", lambda: standard_rows(node, database),
                      lambda rows: texts(rows) == expected)
         member_author(rows["receiver"], reader, "spoofed-editor", "standard_edited_author_unchanged")
-    report("Ana read both standard comments, created and edited her own. created_by stayed her node key. author_id did not identify her. The publisher discarded her deletion and her edit to the publisher's comment.")
+    current = standard_rows(publisher, database)["receiver"]
+    delete = {**mine, "mutation_type": "delete", "record": {}, "expected": {"type": "revision", "revision": current["revision"]}}
+    album = mutation("social/Album", definitions["social/Album"], "member-album", "")
+    album["record"] = {"title": "Not allowed", "description": "Member write", "cover_photo_id": "none", "created_at": "2026-11-14T00:00:00Z"}
+    queue_and_restart(publisher, recipient, database, scope, 1, [delete, album])
+    expected.pop("receiver")
+    for node in (publisher, recipient):
+        rows = retry("standard_own_delete_applied", lambda: standard_rows(node, database), lambda rows: texts(rows) == expected and not query(node, database, "social/Album", "member-album"))
+    report("Ana edited and deleted her own comment. The publisher discarded her edit of the publisher's comment and her Album write.")
 
 
-def exercise_upgrade(publisher, recipient, database, previous, scope):
+def exercise_upgrade(publisher, recipient, database, previous, scope, member_writes):
     new = declare(publisher, database, COMMENT, expanded=True)
     require(new != previous, "circle_schema_upgrade_new_definition")
     seeded = mutation(COMMENT, new, "upgrade", "Before edit")
     seeded["record"]["caption"] = "Keep the optional field"
     write_owned(publisher, database, seeded)
     wait_text(recipient, database, COMMENT, "upgrade", "Before edit", "circle_upgraded_record_received")
-    observe_access(recipient, database, "active", 1, role="submit", write_schemas=COMMENT_GRANT)
+    observe_access(recipient, database, "active", 1, role="submit", member_writes=member_writes)
     current = query(recipient, database, COMMENT, "upgrade")[0]
     update = mutation(COMMENT, new, "upgrade", "After edit")
     update.update(mutation_type="replace", expected={"type": "revision", "revision": current["revision"]},

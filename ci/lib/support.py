@@ -62,14 +62,31 @@ def seed(phrase):
     return entropy
 
 
-class OperationError(Exception):
-    """An error code that contains no product output or credential."""
+# A long base64 or hex token can be a key, a phrase payload, or an invitation.
+# A node key is exactly 64 lowercase hex characters and is public in recipe output.
+SECRET_TOKEN = re.compile(r"[A-Za-z0-9+/_=-]{40,}")
+NODE_KEY = re.compile(r"[0-9a-f]{64}\Z")
 
-    def __init__(self, code, service_field=None, *, cli_refusal=None, socket_refusal=None):
+
+class OperationError(Exception):
+    """An error code. Command text is attached only so failure() can redact it."""
+
+    def __init__(self, code, service_field=None, *, cli_refusal=None, socket_refusal=None,
+                 command_output=None):
         super().__init__(code)
         self.service_field = service_field
         self.cli_refusal = cli_refusal
         self.socket_refusal = socket_refusal
+        self.command_output = command_output
+
+
+def redact_command_text(text):
+    """Drop long tokens, then keep the tail. A cut token must not leave a short secret."""
+    def keep(match):
+        token = match.group(0)
+        return token if NODE_KEY.fullmatch(token) else "[redacted]"
+
+    return SECRET_TOKEN.sub(keep, text)[-600:]
 
 
 def failure(error):
@@ -81,6 +98,10 @@ def failure(error):
         value["cli_refusal"] = error.cli_refusal
     if error.socket_refusal is not None:
         value["socket_refusal"] = error.socket_refusal
+    output = error.command_output
+    if output is not None:
+        stderr, stdout = output
+        value["detail"] = redact_command_text(stderr if stderr else stdout)
     return value
 
 
@@ -175,7 +196,11 @@ def retry(stage, command, complete):
             if complete(result):
                 return result
         time.sleep(2)
-    raise OperationError(stage, cli_refusal=last_error.cli_refusal if last_error else None)
+    raise OperationError(
+        stage,
+        cli_refusal=last_error.cli_refusal if last_error else None,
+        command_output=last_error.command_output if last_error else None,
+    )
 
 
 def summary(message):

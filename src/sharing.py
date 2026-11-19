@@ -45,7 +45,9 @@ class Sharing:
         reply = self.node.databases("share_config", database=database_id)
         if reply["databaseId"] != database_id:
             raise PeopleError("LastDB returned the configuration of a different database")
-        return {key: reply[key] for key in ("databaseId", "revision", "members")}
+        kept = {key: reply[key] for key in ("databaseId", "revision", "members")}
+        kept.update({key: reply[key] for key in ("read", "write", "memberWrites") if key in reply})
+        return kept
 
     def all_configurations(self, selector):
         databases = [self.owned(selector)] if selector else [
@@ -136,9 +138,6 @@ class Sharing:
 
     def finish_update(self, database_id, saved):
         request = json.loads(saved["fields"]["request"])
-        if any(member.get("regrant") and member["role"] == "submit" and "writeSchemas" not in member
-               for member in request["members"]):
-            raise PeopleError("a pending contributor regrant requires owner review")
         try:
             revision = self.apply(database_id, request)
         except LastDBError as error:

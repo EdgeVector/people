@@ -15,6 +15,8 @@ SHARED_ALBUMS = "shared-albums"
 VERSION = 1
 ALBUM_SCHEMAS = ("Album", "AlbumItem", "Photo", "Comment")
 CATALOG = Path(__file__).resolve().parents[1] / "setups" / "shared-albums-v1"
+MEMBER_WRITES = "member-writes.json"
+WRITE_BEHAVIOURS = {"owner_only", "own_records", "shared"}
 SCHEMA = "people/DatabaseSetup"
 LABEL = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 DEFINITION_ID = re.compile(r"[0-9a-f]{64}\Z")
@@ -88,6 +90,7 @@ class Setups:
         if missing:
             with ThreadPoolExecutor(max_workers=len(missing)) as pool:
                 list(pool.map(lambda request: self.install(database_id, request), missing))
+        self.ensure_member_writes(database_id, read_member_writes())
         verified = self.verify(database_id, definitions)
         fields = {"database_id": database_id, "ready": True}
         try:
@@ -134,7 +137,53 @@ class Setups:
             if not matches(row, request):
                 raise PeopleError(f"{name} does not match the shared-albums version 1 setup")
             verified[name] = row["definition_id"]
+        if not allow_missing:
+            self.require_member_writes(database_id, read_member_writes())
         return verified
+
+    def ensure_member_writes(self, database_id, expected):
+        """Send the setup map after the schemas exist. A settings-only change does not use apply()."""
+        if expected is None:
+            return
+        current = self.node.databases("share_config", database=database_id)
+        if current.get("memberWrites") == expected:
+            return
+        request_id = str(uuid4())
+        ack = self.node.databases("set_share_config", database=database_id, config={
+            "expectedRevision": current["revision"],
+            "requestId": request_id,
+            "members": current.get("members") or [],
+            "memberWrites": expected,
+        })
+        if (ack.get("databaseId") != database_id or ack.get("requestId") != request_id
+                or ack.get("committed") is not True):
+            raise PeopleError("LastDB returned a mismatched sharing acknowledgement")
+
+    def require_member_writes(self, database_id, expected):
+        if expected is None:
+            return
+        row = next((item for item in self.sharing.databases() if item["id"] == database_id), None)
+        if row is None or row.get("kind") != "shareable":
+            return
+        current = self.node.databases("share_config", database=database_id)
+        if current.get("memberWrites") != expected:
+            raise PeopleError("the member-write map does not match the setup")
+
+
+def read_member_writes(catalog=CATALOG):
+    """The setup's map, or None when the setup has no member-writes file."""
+    path = catalog / MEMBER_WRITES
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text())
+    except json.JSONDecodeError as error:
+        raise PeopleError("the setup member-write map is invalid") from error
+    if (not isinstance(value, dict) or any(
+            not isinstance(name, str) or behaviour not in WRITE_BEHAVIOURS
+            for name, behaviour in value.items())):
+        raise PeopleError("the setup member-write map is invalid")
+    return value
 
 
 def declaration(database_id, request):

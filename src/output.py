@@ -23,19 +23,28 @@ def render(value):
 
 
 def scope(writes):
+    """A link or a preset chooses read or submit. It does not name the schemas the node will allow."""
     if writes == "all":
-        return "read all, write all schemas"
+        return "can submit changes"
     names = writes.get("names", []) if isinstance(writes, dict) else writes or []
-    return f"read all, write {', '.join(names)}" if names else "read only"
+    return "can submit changes" if names else "read only"
 
 
 def grant(member):
-    return "no access" if not member or member.get("state") == "revoked" else scope(member.get("writeSchemas"))
+    if not member or member.get("state") == "revoked":
+        return "no access"
+    if member.get("role") == "submit":
+        return "can submit changes"
+    if member.get("role") == "read":
+        return "read only"
+    return scope(member.get("writeSchemas"))
 
 
 def cell(key, value):
     if value is None:
         return "-"
+    if key == "memberWrites" and isinstance(value, dict):
+        return ", ".join(f"{name}: {behaviour}" for name, behaviour in sorted(value.items())) or "-"
     if key in ("writeSchemas", "links"):
         return scope(value) if key == "writeSchemas" else ", ".join(
             f"{database}: {scope(writes)}" for database, writes in value.items()) or "-"
@@ -64,7 +73,7 @@ def fields(value, indent=""):
         if isinstance(item, list) and item and all(isinstance(row, dict) for row in item):
             lines.append(f"{indent}{key}:")
             lines.extend(f"{indent}  {line}" for line in table(item).splitlines())
-        elif isinstance(item, dict) and key not in ("writeSchemas", "links"):
+        elif isinstance(item, dict) and key not in ("writeSchemas", "links", "memberWrites"):
             lines.append(f"{indent}{key}:")
             lines.append(fields(item, indent + "  "))
         else:

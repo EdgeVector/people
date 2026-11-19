@@ -297,7 +297,4 @@ Two things come from `EdgeVector/lastdb`: the endpoint profile
 `ci/people_sdk.mjs` uses to read shared records. Both are taken at the
 nightly's exact source commit. The People client the recipes exercise is this
 repo's `client/`.
-Pass `lastdb_release` to a manual run to use a specific nightly tag. Pass
-`recipe_ref`, a branch of this repository, to check out that commit for
-`people-link` or `people-direct` only. The workflow file that runs is the
-one on main. A pull request never receives the cloud credentials.
+Pass `lastdb_release` to a manual run to use a specific nightly tag.

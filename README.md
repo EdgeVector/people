@@ -272,20 +272,24 @@ A pull request gets syntax, manifest and command-grammar checks
 
 Every push to `main` then runs `.github/workflows/dev-sharing.yml`. It also
 runs daily at 09:23 UTC, after the LastDB nightly is published, and can be
-dispatched by hand. Each mode starts two fresh LastDB nodes on the
-runner, a publisher and a recipient, from the newest published LastDB nightly,
-connects them to the DEV cloud, and drives this commit's `people` command
-through the launcher, on the app socket, with `people` registered:
+dispatched by hand. `people-direct` starts four fresh LastDB nodes. The
+other modes start two, a publisher and a recipient. The nodes come from the
+newest published LastDB nightly. The publisher connects to the DEV cloud.
+The recipe drives this commit's `people` command through the launcher, on
+the app socket, with `people` registered:
 
 | Mode | What it proves |
 | --- | --- |
 | `people-share` | Save a contact, set up `shared-albums`, invite, accept, read, revoke and regrant on a filtered share, with two scoped content clients |
 | `people-circles` | Circles with per-database write scopes, allowed and refused writes, app sharing requests, grants changed outside People, direct grant, revoke and restore |
 | `people-prepare` | The manifest and schemas produce a valid unsigned registry declaration for this commit on a fresh node |
+| `people-link` | Open a read link with no member and no cloud account, start that reader from a snapshot, then refuse its writes and its sync after read returns to members |
+| `people-direct` | Two Submit members write directly, converge on one key, a reader is refused, and a proposal works again after write returns to proposals |
 
 Where a recipe is the node owner, it keeps the owner socket. That is schema
-placement, roster reads and writes, a member's proposal, cloud backup, and
-node health. People's own commands do not use those routes.
+placement, roster reads and writes, share settings, a snapshot, an open
+link, a member's proposal, a direct member write, cloud backup, and node
+health. People's own commands do not use those routes.
 
 The recipes are in `ci/`, and the node helpers they use are in `ci/lib/`.
 Two things come from `EdgeVector/lastdb`: the endpoint profile
@@ -293,4 +297,7 @@ Two things come from `EdgeVector/lastdb`: the endpoint profile
 `ci/people_sdk.mjs` uses to read shared records. Both are taken at the
 nightly's exact source commit. The People client the recipes exercise is this
 repo's `client/`.
-Pass `lastdb_release` to a manual run to use a specific nightly tag.
+Pass `lastdb_release` to a manual run to use a specific nightly tag. Pass
+`recipe_ref`, a branch of this repository, to check out that commit for
+`people-link` or `people-direct` only. The workflow file that runs is the
+one on main. A pull request never receives the cloud credentials.

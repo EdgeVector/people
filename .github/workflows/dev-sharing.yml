@@ -1,15 +1,18 @@
 name: DEV sharing
 
-# Real sharing checks for People. Each mode starts two fresh LastDB nodes on
-# the runner (a publisher and a recipient), connects them to the DEV cloud, and
-# drives this commit's `people` command through a published LastDB nightly.
+# Real sharing checks for People. Each mode starts fresh LastDB nodes on the
+# runner, connects the publisher to the DEV cloud, and drives this commit's
+# `people` command through a published LastDB nightly. people-direct starts
+# four nodes. The other modes start a publisher and one recipient.
 # The recipes are in ci/ and their node helpers in ci/lib/. A checkout of
 # EdgeVector/lastdb at the nightly's exact source commit supplies the compiled
 # endpoint profile, lastdb_node/environments.json, and the app SDK's data
 # client for reading shared records. The People client under test is client/.
 #
 # Cloud steps run only on main. A pull request gets the syntax job and never
-# receives cloud credentials.
+# receives cloud credentials. A manual run on main may set recipe_ref to a
+# branch of this repository. That run checks out the branch for people-link or
+# people-direct only. The workflow file remains the one on main.
 on:
   push:
     branches: [main]
@@ -24,8 +27,12 @@ on:
       mode:
         description: "Which check to run"
         type: choice
-        options: [all, people-share, people-circles, people-scale, people-prepare]
+        options: [all, people-share, people-circles, people-scale, people-prepare, people-link, people-direct]
         default: all
+      recipe_ref:
+        description: "Branch of this repository to check out for people-link or people-direct. Empty uses this commit. The run stays on main."
+        type: string
+        default: ""
       lastdb_release:
         description: "LastDB nightly tag, for example nightly-20261116-3484b912b. Empty selects the newest published nightly"
         type: string
@@ -53,6 +60,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       modes: ${{ steps.modes.outputs.modes }}
+      recipe_sha: ${{ steps.modes.outputs.recipe_sha }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -72,14 +80,36 @@ jobs:
         id: modes
         env:
           MODE: ${{ inputs.mode || 'all' }}
+          RECIPE_REF: ${{ inputs.recipe_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          sha="$GITHUB_SHA"
+          if [ -n "${RECIPE_REF:-}" ]; then
+            # The event stays on main. Only this repository's own branch is
+            # checked out, and only for the two modes that prove the new paths.
+            test "$EVENT_NAME" = workflow_dispatch
+            test "$GITHUB_REPOSITORY" = EdgeVector/people
+            test "$GITHUB_REF" = refs/heads/main
+            case "$MODE" in
+              people-link|people-direct) ;;
+              *) exit 2 ;;
+            esac
+            case "$RECIPE_REF" in
+              -*|*..*|*:*|*[!A-Za-z0-9._/-]*) exit 2 ;;
+            esac
+            encoded="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$RECIPE_REF")"
+            sha="$(gh api "repos/EdgeVector/people/branches/${encoded}" --jq .commit.sha)"
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          fi
           case "$MODE" in
-            all) modes='["people-share","people-circles","people-scale","people-prepare"]' ;;
-            people-share|people-circles|people-scale|people-prepare) modes="[\"$MODE\"]" ;;
+            all) modes='["people-share","people-circles","people-scale","people-prepare","people-link","people-direct"]' ;;
+            people-share|people-circles|people-scale|people-prepare|people-link|people-direct) modes="[\"$MODE\"]" ;;
             *) exit 2 ;;
           esac
           printf 'modes=%s\n' "$modes" >> "$GITHUB_OUTPUT"
+          printf 'recipe_sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
 
   sharing:
     name: ${{ matrix.mode }} in DEV
@@ -100,7 +130,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.recipe-syntax.outputs.recipe_sha }}
           persist-credentials: false
       - name: Download and verify the LastDB nightly
         env:
@@ -149,7 +179,7 @@ jobs:
           {
             printf 'LastDB nightly: `%s` (`%s`)\n\n' "$tag" "$version"
             printf 'LastDB source: `%s`\n\n' "$source"
-            printf 'People source: `%s`\n' "$GITHUB_SHA"
+            printf 'People source: `%s`\n' "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Check out LastDB at the nightly's source commit
         env:
@@ -166,7 +196,7 @@ jobs:
           test -f "$source/lastdb_node/environments.json"
           printf 'LASTDB_SOURCE=%s\n' "$source" >> "$GITHUB_ENV"
       - name: Build the LastDB app SDK for content reads
-        if: matrix.mode != 'people-prepare'
+        if: matrix.mode == 'people-share' || matrix.mode == 'people-circles' || matrix.mode == 'people-scale'
         run: |
           set -euo pipefail
           # ci/people_sdk.mjs uses this repo's People client. It needs the LastDB
@@ -199,6 +229,8 @@ jobs:
             people-circles) recipe=people_circles ;;
             people-scale) recipe=people_scale ;;
             people-prepare) recipe=people_prepare ;;
+            people-link) recipe=people_link ;;
+            people-direct) recipe=people_direct ;;
             *) exit 2 ;;
           esac
           export PYTHONPATH="$GITHUB_WORKSPACE/ci/lib"

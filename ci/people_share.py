@@ -6,8 +6,9 @@ import os
 import time
 import uuid
 
-from people_app import (SETUP, install, observe_access, open_content_apps, pick, read_album,
-                        read_records, report_content_flow, sdk, people, write_owned)
+from people_app import (SETUP, expect_setup_member_writes_pending, install, observe_access,
+                        open_content_apps, pick, read_album, read_records, report_content_flow, sdk,
+                        people, write_owned)
 from support import require, retry, run_operation, summary
 
 
@@ -73,7 +74,8 @@ def transfer(programs, root, publisher, recipient, api_key):
     name = f"ci-people-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
     if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
-    verify_shared_albums_setup(recipient, name + "-albums")
+    # The recipient has no cloud account. Create must still place the schemas and say the map is pending.
+    expect_setup_member_writes_pending(recipient, name + "-offline")
     created = sdk(publisher, "create", name=name)
     database = str(uuid.UUID(created["id"]))
     require(database == created["id"] and created["spec"] == SPEC, "people_created_database")
@@ -93,6 +95,8 @@ def transfer(programs, root, publisher, recipient, api_key):
             and connected["credentials_saved"] is True, "people_dev_connection")
     publisher.keep_saved_credentials = True
     publisher.start()
+    # The publisher is connected, so setup creation can store the member-write map.
+    verify_shared_albums_setup(publisher, name + "-albums")
     contact = root / "reader.contact"
     reader_key = programs.command(recipient.home, [
         "share", "contact", "--out", str(contact),
@@ -114,8 +118,12 @@ def verify_shared_albums_setup(node, name):
     setup = {"setupName": "shared-albums", "requiredVersion": 1}
     created = people(node, "db", "create", name, "--setup", setup["setupName"])
     database = created["databaseId"]
+    if created["memberWrites"] == "pending":
+        # The head can still be uploading on a node that just connected. Finish sets the map.
+        created = people(node, "db", "verify", database, "--setup", setup["setupName"], "--finish")
     require(str(uuid.UUID(database)) == database and created["name"] == name
-            and created["setupName"] == setup["setupName"] and created["version"] == 1,
+            and created["setupName"] == setup["setupName"] and created["version"] == 1
+            and created["databaseId"] == database and created["memberWrites"] != "pending",
             "people_named_setup_database")
     definitions = created["definitions"]
     require(set(definitions) == {"social/Album", "social/AlbumItem", "social/Photo", "social/Comment"},

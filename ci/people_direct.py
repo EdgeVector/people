@@ -237,7 +237,7 @@ def operation(programs, root, publisher, recipient, api_key):
         member_b = local_node(programs, root, "bo")
         member_c = local_node(programs, root, "cam")
     except OperationError as error:
-        attach(error, roster, database)
+        attach(error, roster, database, evidence=True)
         raise
     roster = [("publisher", publisher), ("Ana", recipient), ("Bo", member_b), ("Cam", member_c)]
     granted, failed = [], False
@@ -246,7 +246,7 @@ def operation(programs, root, publisher, recipient, api_key):
             try:
                 share(programs, root, publisher, recipient, member_b, member_c, database, definition, granted)
             except OperationError as error:
-                attach(error, roster, database)
+                attach(error, roster, database, evidence=True)
                 raise
     except Exception:
         failed = True
@@ -255,9 +255,12 @@ def operation(programs, root, publisher, recipient, api_key):
         try:
             revoke(publisher, database, granted, failed)
         except OperationError as error:
-            attach(error, roster, database)
+            attach(error, roster, database, evidence=True)
             raise
 
 
 if __name__ == "__main__":
+    # OwnedNode discards daemon stderr unless this name is set. The failure
+    # detail reads that file from each node home. Other recipes leave it unset.
+    os.environ["PEOPLE_DIRECT_DAEMON_LOG"] = "daemon.log"
     run_operation(operation)

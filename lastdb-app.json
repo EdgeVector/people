@@ -1,6 +1,6 @@
 {
   "app_id": "people",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "source": "https://github.com/EdgeVector/people.git",
   "audience": "public",
   "metadata": {

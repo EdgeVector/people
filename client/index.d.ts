@@ -55,7 +55,8 @@ export interface PeopleDatabaseSetup {
   definitions: Record<string, string>;
   /**
    * The stored map when this command confirmed the share configuration.
-   * `pending` when it did not. Create still places the schemas in that case.
+   * `pending` when this node has no cloud account. Create still places the
+   * schemas in that case. Any HTTP 503 fails the command.
    */
   memberWrites: 'pending' | Record<string, 'owner_only' | 'own_records' | 'shared'>;
 }

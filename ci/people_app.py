@@ -203,7 +203,7 @@ def expect_setup_member_writes_pending(node, name):
             and all(isinstance(item, str) and len(item) == 64 for item in definitions.values()),
             "people_setup_pending_member_writes")
     sentence = (
-        "The member-write map was not set because the share configuration is not confirmed, "
+        "The member-write map was not set because this node has no cloud account, "
         f"so once this node is connected run `people db verify {database} --setup shared-albums --finish`."
     )
     require(notices[0].strip() == sentence, "people_setup_pending_notice")

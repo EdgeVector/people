@@ -7,13 +7,9 @@ import json
 from pathlib import Path
 import re
 import sys
-import time
 from uuid import uuid4
 
-from lastdb import (
-    SHARE_CONFIRM_SECONDS, LastDBError, PeopleError, call_until_share_confirmed,
-    share_configuration_unconfirmed,
-)
+from lastdb import LastDBError, PeopleError, no_cloud_account, raise_share_refusal
 
 
 SHARED_ALBUMS = "shared-albums"
@@ -23,8 +19,6 @@ CATALOG = Path(__file__).resolve().parents[1] / "setups" / "shared-albums-v1"
 MEMBER_WRITES = "member-writes.json"
 WRITE_BEHAVIOURS = {"owner_only", "own_records", "shared"}
 SCHEMA = "people/DatabaseSetup"
-# Create must not spend the sharing-update wait on a node that can never confirm.
-SETUP_CONFIRM_SECONDS = 20
 LABEL = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 DEFINITION_ID = re.compile(r"[0-9a-f]{64}\Z")
 CONTRACT_FIELDS = ("descriptive_name", "purpose_statement", "schema_type")
@@ -60,15 +54,12 @@ class Setups:
                 if database["kind"] != "shareable" or not database.get("name"):
                     raise PeopleError("select a named database you own to finish setup")
                 database, verified, member_writes = self.provision(
-                    database["name"], definitions, existing=database,
-                    confirm_seconds=SHARE_CONFIRM_SECONDS, required=True)
+                    database["name"], definitions, existing=database)
             else:
                 verified = self.verify(value, definitions)
-                member_writes = self.member_writes_state(
-                    database, read_member_writes(), seconds=SETUP_CONFIRM_SECONDS)
+                member_writes = self.member_writes_state(database, read_member_writes())
         else:
-            database, verified, member_writes = self.provision(
-                value, definitions, confirm_seconds=SETUP_CONFIRM_SECONDS, required=False)
+            database, verified, member_writes = self.provision(value, definitions)
         announce_pending(database, setup, member_writes)
         return {"databaseId": database["id"], "name": database.get("name"),
                 "setupName": setup, "version": version, "definitions": verified,
@@ -81,7 +72,7 @@ class Setups:
             raise PeopleError("select a ready whole-database share by ID")
         return row
 
-    def provision(self, name, definitions, *, existing=None, confirm_seconds, required):
+    def provision(self, name, definitions, *, existing=None):
         # Reserve the ID before issuing the create request so a lost reply is retryable.
         key = f"{SHARED_ALBUMS}:{VERSION}:{name}"
         saved = self.node.get_record(SCHEMA, key)
@@ -100,15 +91,13 @@ class Setups:
         expected = read_member_writes()
         if saved["fields"]["ready"]:
             verified = self.verify(database_id, definitions)
-            return database, verified, self.member_writes_state(
-                database, expected, seconds=confirm_seconds)
+            return database, verified, self.member_writes_state(database, expected)
         installed = self.verify(database_id, definitions, allow_missing=True)
         missing = [request for schema, request in definitions.items() if schema not in installed]
         if missing:
             with ThreadPoolExecutor(max_workers=len(missing)) as pool:
                 list(pool.map(lambda request: self.install(database_id, request), missing))
-        stored = self.ensure_member_writes(
-            database_id, expected, seconds=confirm_seconds, required=required)
+        stored = self.ensure_member_writes(database_id, expected)
         verified = self.verify(database_id, definitions)
         if stored is None:
             return database, verified, "pending"
@@ -159,30 +148,20 @@ class Setups:
             verified[name] = row["definition_id"]
         return verified
 
-    def ensure_member_writes(self, database_id, expected, *, seconds, required):
-        """Store the setup map. Return it, or None when a create stays unconfirmed.
+    def ensure_member_writes(self, database_id, expected):
+        """Store the setup map, or None when this node has no cloud account.
 
-        Create answers ready before the cloud has a mutation log head. Until
-        that head exists, the share configuration read and this write both
-        answer the unconfirmed 503. A node with no cloud account returns that
-        same sentence, and the app API does not say which one it is. Create
-        waits at most 20 seconds and then leaves the map pending. `db verify
-        --finish` waits the sharing bound and raises when the map is still
-        unconfirmed, because that command's job is to set it. The same body
-        is sent again: a lost answer must not sign a second statement.
+        The node waits for enrollment. People does not. No cloud account
+        leaves the map pending and the command succeeds. Still enrolling,
+        and any other HTTP 503, fails. The unconfirmed sentence fails too:
+        the node is enrolled and the service answer could not be confirmed.
+        A later command sends the same body. This call does not sign a
+        second statement, and it does not wait.
         """
         if expected is None:
             return {}
-        deadline = time.monotonic() + seconds
-
-        def confirmed(operation):
-            return call_until_share_confirmed(operation, seconds=max(0, deadline - time.monotonic()))
-
-        try:
-            current = confirmed(lambda: self.node.databases("share_config", database=database_id))
-        except LastDBError as error:
-            if required or not share_configuration_unconfirmed(error):
-                raise
+        current = self.share_config(database_id)
+        if current is None:
             return None
         if current.get("memberWrites") == expected:
             return expected
@@ -194,45 +173,50 @@ class Setups:
             "memberWrites": expected,
         }
         try:
-            ack = confirmed(lambda: self.node.databases(
-                "set_share_config", database=database_id, config=config))
+            ack = self.node.databases("set_share_config", database=database_id, config=config)
         except LastDBError as error:
-            if required or not share_configuration_unconfirmed(error):
-                raise
-            return None
+            if no_cloud_account(error):
+                return None
+            raise_share_refusal(error)
+            raise
         if (ack.get("databaseId") != database_id or ack.get("requestId") != request_id
                 or ack.get("committed") is not True):
             raise PeopleError("LastDB returned a mismatched sharing acknowledgement")
         return expected
 
-    def member_writes_state(self, database, expected, *, seconds):
-        """The stored map, or pending when this node cannot confirm the share configuration."""
+    def member_writes_state(self, database, expected):
+        """The stored map, or pending when this node has no cloud account."""
         if expected is None:
             return {}
         if database.get("kind") != "shareable":
             stored = (database.get("selfAccess") or {}).get("memberWrites")
             return stored if isinstance(stored, dict) else "pending"
-        try:
-            current = call_until_share_confirmed(
-                lambda: self.node.databases("share_config", database=database["id"]),
-                seconds=seconds)
-        except LastDBError as error:
-            if share_configuration_unconfirmed(error):
-                return "pending"
-            raise
+        current = self.share_config(database["id"])
+        if current is None:
+            return "pending"
         stored = current.get("memberWrites")
         if stored != expected:
             raise PeopleError("the member-write map does not match the setup")
         return stored if isinstance(stored, dict) else {}
 
+    def share_config(self, database_id):
+        """The share configuration, or None when this node has no cloud account."""
+        try:
+            return self.node.databases("share_config", database=database_id)
+        except LastDBError as error:
+            if no_cloud_account(error):
+                return None
+            raise_share_refusal(error)
+            raise
+
 
 def announce_pending(database, setup, member_writes):
-    """One sentence on stderr when this node owns the database and did not store the map."""
+    """One sentence on stderr when this node owns the database and has no cloud account."""
     if member_writes != "pending" or database.get("kind") != "shareable":
         return
     database_id = database["id"]
     print(
-        "The member-write map was not set because the share configuration is not confirmed, "
+        "The member-write map was not set because this node has no cloud account, "
         f"so once this node is connected run `people db verify {database_id} --setup {setup} --finish`.",
         file=sys.stderr,
     )

@@ -93,13 +93,11 @@ export interface PeopleClient {
   requestSharing(request: PeopleSharingRequest): Promise<PeopleSharingStatus>;
   /** Read the outcome using the UUID assigned when the app proposed the change. */
   getSharingStatus(requestId: string): Promise<PeopleSharingStatus>;
-  /** Create a named database on the filtered `social` spec, version 1. */
-  createDatabase(name: string): Promise<PeopleDatabase>;
   /** Create an empty named whole-database share for an app's own schemas. */
   createSharedDatabase(name: string): Promise<PeopleDatabase>;
   /** Open a versioned database setup using People's catalog. */
   setupDatabase(request: PeopleSetupRequest): Promise<PeopleDatabaseSetup>;
-  /** Omit contactPath when People already remembers the verified recipient. */
+  /** Seal an invitation. Grant access with a circle or `grant set` first. Omit contactPath when People already remembers the recipient. */
   inviteReader(database: string, recipient: {
     name: string;
     nodeKey: string;

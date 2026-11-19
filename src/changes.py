@@ -91,7 +91,7 @@ def circle_remove(app, selector, *, review=None, apply=False, token=None, defer=
 
 
 def grant_revoke(app, database, person, *, apply=False):
-    """Revoke one person on an owned database of either sharing format."""
+    """Revoke one person on an owned whole-database share."""
     database = app.sharing.owned(database)
     key = app.resolve_people([person], known=False)[0]
     if not apply:
@@ -130,7 +130,7 @@ def retry(app, database=None, review=None):
 
 
 def invite(app, database, person, *, name=None, contact=None, out=None):
-    """Seal an invitation. On a filtered share this also grants reader access."""
+    """Seal an invitation for a person who already has a grant."""
     receipt = seal(app, database, person, name, contact)
     if out is None:
         return receipt
@@ -151,7 +151,4 @@ def seal(app, database, person, name, contact):
         key = app.remember_file(person, name, contact)["nodeKey"]
     else:
         key = app.resolve_people([person])[0]
-    if database.get("sharingMode") == "whole_database":
-        return app.seal(database, key)
-    saved = app.people.by_keys([key])[key]
-    return app.sharing.invite(database["id"], name or saved["display_name"], key)
+    return app.seal(database, key)

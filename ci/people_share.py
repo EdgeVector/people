@@ -12,7 +12,7 @@ from people_app import (SETUP, expect_setup_member_writes_pending, install, obse
 from support import require, retry, run_operation, summary
 
 
-SPEC = {"name": "social", "version": 1}
+SCOPE = {"name": "whole-database", "version": 1}
 SCHEMA = "social/Album"
 ALBUMS = ("Before sharing", "While shared", "While revoked")
 
@@ -51,7 +51,18 @@ def expect_roster(node, database, revision, member=None):
             "people_applied_configuration")
 
 
-def share(publisher, database, contact, node_key, revision):
+def grant_reader(publisher, database, person, reader_key, revision):
+    preview = people(publisher, "grant", "set", database, person, "--write", "read")
+    require(preview.get("applied") is False and isinstance(preview.get("token"), str),
+            "people_grant_reader_preview")
+    result = people(publisher, "grant", "set", database, person, "--write", "read",
+                    "--apply", "--token", preview["token"])
+    require(result.get("applied") is True, "people_grant_reader")
+    expect_roster(publisher, database, revision,
+                  {"nodeKey": reader_key, "role": "read", "state": "active"})
+
+
+def seal_invite(publisher, database, contact, node_key, revision):
     arguments = ["invite", database, node_key]
     if contact is not None:
         arguments.extend(["--name", "Ana", "--contact", str(contact)])
@@ -59,7 +70,6 @@ def share(publisher, database, contact, node_key, revision):
     require(receipt["databaseId"] == database and receipt["revision"] == str(revision)
             and isinstance(receipt.get("invitation"), str) and bool(receipt["invitation"]),
             "people_invitation_handoff")
-    expect_roster(publisher, database, revision, {"nodeKey": node_key, "role": "read", "state": "active"})
     return receipt
 
 
@@ -70,15 +80,27 @@ def revoke(publisher, database, reader_key, revision):
     expect_roster(publisher, database, revision, {"nodeKey": reader_key, "role": "read", "state": "revoked"})
 
 
+def restore_reader(publisher, database, person, reader_key, revision):
+    preview = people(publisher, "grant", "restore", database, person, "--write", "read")
+    require(preview.get("applied") is False and isinstance(preview.get("token"), str),
+            "people_restore_reader_preview")
+    result = people(publisher, "grant", "restore", database, person, "--write", "read",
+                    "--apply", "--token", preview["token"])
+    require(result.get("applied") is True, "people_restore_reader")
+    expect_roster(publisher, database, revision,
+                  {"nodeKey": reader_key, "role": "read", "state": "active"})
+
+
 def transfer(programs, root, publisher, recipient, api_key):
     name = f"ci-people-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
     if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
     # The recipient has no cloud account. Create must still place the schemas and say the map is pending.
     expect_setup_member_writes_pending(recipient, name + "-offline")
-    created = sdk(publisher, "create", name=name)
+    created = sdk(publisher, "create-shared", name=name)
     database = str(uuid.UUID(created["id"]))
-    require(database == created["id"] and created["spec"] == SPEC, "people_created_database")
+    require(database == created["id"] and created.get("sharingMode") == "whole_database"
+            and created.get("spec") == SCOPE, "people_created_database")
     summary(f"Owned DEV mutation log `{database}` for `{name}`.")
     print(f"People DEV database {database}", flush=True)
     schema = json.loads((SETUP / "Album.json").read_text())
@@ -95,7 +117,8 @@ def transfer(programs, root, publisher, recipient, api_key):
             and connected["credentials_saved"] is True, "people_dev_connection")
     publisher.keep_saved_credentials = True
     publisher.start()
-    # The publisher is connected, so setup creation can store the member-write map.
+    # The publisher is connected, so setup can store the member-write map on this share.
+    finish_member_writes(publisher, database)
     verify_shared_albums_setup(publisher, name + "-albums")
     contact = root / "reader.contact"
     reader_key = programs.command(recipient.home, [
@@ -112,6 +135,16 @@ def transfer(programs, root, publisher, recipient, api_key):
             and person in people(publisher, "person", "list"), "people_app_saved_contact")
     share_albums(publisher, recipient, name, database, reader_key, publisher_key)
     check_role_and_overview(programs, root, publisher, database, name, contact, reader_key)
+
+
+def finish_member_writes(node, database):
+    """Install shared-albums schemas and the member-write map on an owned whole-database share."""
+    finished = people(node, "db", "verify", database, "--setup", "shared-albums", "--finish")
+    require(finished["databaseId"] == database and finished["memberWrites"] != "pending",
+            "people_share_member_writes")
+    expected = json.loads((SETUP / "member-writes.json").read_text())
+    stored = node.call(f"/api/databases/{database}/share/config").get("memberWrites")
+    require(stored == expected, "people_share_member_writes_stored")
 
 
 def verify_shared_albums_setup(node, name):
@@ -139,7 +172,7 @@ def verify_shared_albums_setup(node, name):
     people(node, "db", "verify", database, "--setup", setup["setupName"], "--version", "2",
            refusal=b"supported People database setup")
     write_album(node, database, 0)
-    selections = [(app, pick(node, {"name": "whole-database", "version": 1}, "read", database))
+    selections = [(app, pick(node, SCOPE, "read", database))
                   for app in ("album-viewer", "photo-journal")]
     require(all(selection["databaseId"] == database for _, selection in selections)
             and read_album(node, selections, database, "album-0", ALBUMS[0]),
@@ -161,24 +194,27 @@ def verify_shared_albums_setup(node, name):
 
 def share_albums(publisher, recipient, name, database, reader_key, publisher_key):
     try:
+        grant_reader(publisher, database, "Ana", reader_key, 1)
         receipt = sdk(publisher, "invite", database=name, recipient={"name": "Ana", "nodeKey": reader_key})
-        require(receipt["databaseId"] == database and receipt["publisher"] == publisher_key and receipt["revision"] == "1",
-                "people_publisher_identity")
+        require(receipt["databaseId"] == database and receipt["publisher"] == publisher_key
+                and receipt["revision"] == "1", "people_publisher_identity")
         received = sdk(recipient, "accept", publisher=publisher_key, name="family", receipt=receipt)
-        require(received.get("id") == database and received.get("spec") == SPEC
-                and received.get("access") == "reader", "people_received_metadata")
+        require(received.get("id") == database and received.get("sharingMode") == "whole_database"
+                and received.get("spec") == SCOPE and received.get("access") == "reader",
+                "people_received_metadata")
         wait_for_album(recipient, database, 0)
         recipient.stop()
         recipient.start()
         listed = next(row for row in recipient.call("/api/databases")["databases"]
                       if row["id"] == database)
-        require(listed.get("spec") == SPEC, "people_spec_after_restart")
+        require(listed.get("sharingMode") == "whole_database" and listed.get("spec") == SCOPE,
+                "people_spec_after_restart")
         observe_access(recipient, database, "active", 1)
         selections = open_content_apps(recipient, database)
         require(read_album(recipient, selections, database, "album-0", ALBUMS[0]), "people_apps_initial_album")
         grants = people(publisher, "grant", "list", database)
         require(len(grants) == 1 and grants[0]["user"] == "Ana", "people_remembers_contact")
-        share(publisher, database, None, reader_key, 1)
+        seal_invite(publisher, database, None, reader_key, 1)
         write_album(publisher, database, 1)
         wait_for_album(recipient, database, 1)
         require(read_album(recipient, selections, database, "album-1", ALBUMS[1]), "people_apps_second_album")
@@ -192,7 +228,8 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
         require(read_album(recipient, selections, database, "album-2")
                 and read_album(recipient, selections, database, "album-0", ALBUMS[0]), "people_apps_revoked")
         wait_for_album(recipient, database, 0)
-        share(publisher, database, None, reader_key, 3)
+        restore_reader(publisher, database, "Ana", reader_key, 3)
+        seal_invite(publisher, database, None, reader_key, 3)
         wait_for_album(recipient, database, 2)
         observe_access(recipient, database, "active", 3)
         require(read_album(recipient, selections, database, "album-2", ALBUMS[2]), "people_apps_caught_up")
@@ -203,25 +240,29 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
             revoke(publisher, database, reader_key, final_revision)
             print(f"Final ExeMem revoke acknowledged at revision {final_revision}.", flush=True)
             summary(f"Final ExeMem revoke acknowledged at revision {final_revision}.")
-    message = ("The People SDK created a named database and returned a sealed invitation when called by name. "
-               "The recipient opened the same database ID through the SDK. "
-               "ExeMem confirmed grant, revoke and regrant. The recipient kept the People v1 spec across "
-               "restart, read later albums, stopped receiving them after revoke, and caught up after regrant.")
+    message = ("The People SDK created a whole-database share and sealed an invitation after a reader "
+               "grant. The recipient opened the same database ID through the SDK. "
+               "ExeMem confirmed grant, revoke and restore. The recipient kept the whole-database "
+               "binding across restart, read later albums, stopped receiving them after revoke, and "
+               "caught up after restore.")
     print(message, flush=True)
     summary(message)
     report_content_flow()
 
 
 def check_role_and_overview(programs, root, publisher, other_database, name, contact, reader_key):
-    # Use a second generated database so the original transfer keeps its four revisions.
-    created = people(publisher, "db", "create", f"{name}-roles", "--filtered")
+    # Use a second generated database so the original transfer keeps its revisions.
+    created = people(publisher, "db", "create", f"{name}-roles")
     database = str(uuid.UUID(created["id"]))
+    require(created.get("sharingMode") == "whole_database" and created.get("spec") == SCOPE,
+            "people_role_database")
     summary(f"Owned DEV role-check mutation log `{database}`.")
     print(f"People DEV role-check database {database}", flush=True)
+    finish_member_writes(publisher, database)
     retry("people_role_configuration", lambda: roster(publisher, database),
           lambda config: config.get("revision") == "0")
+    people(publisher, "invite", database, reader_key, refusal=b"grant access with a circle")
     grant_file = root / "contributor.grant"
-    arguments = ("invite", database, reader_key)
     try:
         programs.command(publisher.home, [
             "--db", database, "share", "contributors", "grant", "--recipient", str(contact),
@@ -229,19 +270,19 @@ def check_role_and_overview(programs, root, publisher, other_database, name, con
         ], timeout=30)
         contributor = {"nodeKey": reader_key, "role": "submit", "state": "active"}
         expect_roster(publisher, database, 1, contributor)
-        people(publisher, *arguments, refusal=b"already has contributor access")
-        expect_roster(publisher, database, 1, contributor)
         people(publisher, "grant", "revoke", database, reader_key, "--apply")
         expect_roster(publisher, database, 2, {**contributor, "state": "revoked"})
-        share(publisher, database, None, reader_key, 3)
+        restore_reader(publisher, database, "Ana", reader_key, 3)
+        seal_invite(publisher, database, None, reader_key, 3)
         check_overview(publisher, other_database, database, reader_key)
     finally:
         applied = roster(publisher, database)
         if any(member["state"] == "active" for member in applied.get("members", [])):
             people(publisher, "grant", "revoke", database, reader_key, "--apply")
     expect_roster(publisher, database, 4, {"nodeKey": reader_key, "role": "read", "state": "revoked"})
-    message = ("People refused an active contributor, restored a revoked contributor as a reader, "
-               "and kept a confirmed roster visible while another database's roster was unavailable.")
+    message = ("People refused to seal with no grant, restored a revoked LastDB contributor as a "
+               "reader, and kept a confirmed roster visible while another database's roster was "
+               "unavailable.")
     print(message, flush=True)
     summary(message)
 

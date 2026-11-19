@@ -18,8 +18,6 @@ try {
   let result;
   switch (action) {
     case 'create':
-      result = await people.createDatabase(input.name);
-      break;
     case 'create-shared':
       result = await people.createSharedDatabase(input.name);
       break;

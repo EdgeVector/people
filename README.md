@@ -54,14 +54,14 @@ error prints one `people:` line on standard error and exits non-zero.
 | `circle list`, `circle show CIRCLE` | Circles, their members, and their linked databases |
 | `circle set CIRCLE [--members A,B] [--link DB=SCOPE] [--unlink DB] [--rename NAME]` | Create a circle, or change the named parts of one |
 | `circle remove CIRCLE` | Remove a circle and the access it grants |
-| `db create NAME [--setup shared-albums] [--filtered]` | Create a whole-database share, optionally from a named setup |
+| `db create NAME [--setup shared-albums]` | Create a whole-database share, optionally from a named setup |
 | `db verify ID --setup NAME [--finish]` | Verify a database against a named setup |
 | `db list`, `db show DB` | Databases. One database with its roster, circles, and pending change |
 | `db accept [FILE] --publisher KEY [--name NAME]` | Accept a sealed invitation |
 | `db retry [DB]` | Resume unfinished sharing updates |
 | `grant list [DB]`, `grant revoke DB PERSON` | Active grants. Revoke one person |
 | `grant set DB PERSON --write SCOPE`, `grant restore DB PERSON` | Give one person their own grant on a whole-database share. Restore a revoked person |
-| `invite DB PERSON [--out FILE]` | Seal an invitation for a person |
+| `invite DB PERSON [--out FILE]` | Seal an invitation for a person with an existing grant |
 | `request submit`, `request status ID` | For apps: propose a sharing change, read its outcome |
 | `request list`, `request show ID`, `request approve ID`, `request decline ID` | For the owner: review and decide app proposals |
 | `pick-database --spec NAME --version N --intent read\|write` | List the databases an app can use, or select one |
@@ -225,28 +225,6 @@ The owner socket trusts every program that runs as its OS user, so an app
 running as the owner could run `request approve` itself. Run content apps
 outside that trust boundary before treating owner approval as app isolation.
 
-## Filtered shares
-
-`people db create NAME --filtered` creates a share for albums and photos on
-LastDB's `social` spec, version 1. You can also manage an existing named
-database set up with the `social` spec or the `lastdb-files` spec. On these
-shares `invite` grants reader access and seals the invitation in one step:
-
-```sh
-people invite family "$ana_key" --name Ana --contact ana.contact
-```
-
-You can omit `--name` and `--contact` when People already remembers the
-contact. Calling `invite` again on an active reader issues a fresh invitation
-at the same revision, and on a revoked reader restores access. An active
-contributor grant must be revoked before `invite` grants reader access.
-`grant list` reports a database with a pending or unavailable roster in its
-own status row. Other databases' confirmed access stays visible.
-
-People reads and updates the whole LastDB share configuration, preserving
-other members. It records the exact pending request in the personal database
-until LastDB confirms the result or definitively rejects it.
-
 ## How sharing works
 
 An active member with role `submit` can send an encrypted change to the
@@ -283,13 +261,13 @@ People does not send a per-member schema list for this. A circle link or a prese
 
 ## Choosing a database for an app
 
-`people pick-database --spec social --version 1 --intent read` lists the
-databases that match. Add `--database ID` to check one selection. The command
-returns that database's id, name, and spec. The app names that id in the
-`database` field of each `POST /v1/read` and `POST /v1/write` item. A write
-to a received database is refused. A change to a received whole-database
-share is the proposal described in How sharing works. LastDB limits an app
-by the schemas it declared, not by database.
+`people pick-database --spec whole-database --version 1 --intent read` lists
+the databases that match. Add `--database ID` to check one selection. The
+command returns that database's id, name, and spec. The app names that id in
+the `database` field of each `POST /v1/read` and `POST /v1/write` item. A
+write to a received database is refused. A change to a received
+whole-database share is the proposal described in How sharing works. LastDB
+limits an app by the schemas it declared, not by database.
 
 JavaScript and TypeScript apps use [`@lastdb/people-client`](client/README.md)
 in `client/`. Its `peopleClient` runs these commands and checks their output.
@@ -342,7 +320,7 @@ the app socket, with `people` registered:
 
 | Mode | What it proves |
 | --- | --- |
-| `people-share` | Save a contact, set up `shared-albums`, invite, accept, read, revoke and regrant on a filtered share, with two scoped content clients |
+| `people-share` | Save a contact, set up `shared-albums`, grant, invite, accept, read, revoke and restore on a whole-database share, with two scoped content clients |
 | `people-circles` | Circles on a database whose setup set the member-write map, allowed and refused writes, app sharing requests, grants changed outside People, direct grant, revoke and restore |
 | `people-prepare` | The manifest and schemas produce a valid unsigned registry declaration for this commit on a fresh node |
 | `people-link` | Open a read link with no member and no cloud account, start that reader from a snapshot, then refuse its writes and its sync after read returns to members |

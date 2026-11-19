@@ -76,11 +76,6 @@ export function peopleClient({ dataDir, peoplePath = 'people', lastdbPath }) {
       return parseSharingStatus(await run(['request', 'status'], ['--', requestId]), requestId);
     },
 
-    /** Create a named database on the filtered `social` spec, version 1. */
-    async createDatabase(name) {
-      return parseDatabase(await run(['db', 'create'], ['--filtered', '--', name]));
-    },
-
     /** Create an empty named whole-database share for an app's own schemas. */
     async createSharedDatabase(name) {
       const database = parseDatabase(await run(['db', 'create'], ['--', name]));
@@ -100,7 +95,7 @@ export function peopleClient({ dataDir, peoplePath = 'people', lastdbPath }) {
       return parseSetup(await run(['db', 'verify'], [...args, '--', request.databaseId]), request);
     },
 
-    /** Omit contactPath when People already remembers the verified recipient. */
+    /** Seal an invitation. Grant access with a circle or `grant set` first. Omit contactPath when People already remembers the recipient. */
     async inviteReader(database, recipient) {
       const args = [`--name=${recipient.name}`];
       if (recipient.contactPath !== undefined) args.push(`--contact=${recipient.contactPath}`);

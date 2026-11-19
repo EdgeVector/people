@@ -14,7 +14,7 @@ from support import CREDENTIALS_FILE, OperationError, decode_json, require, retr
 
 ROOT = Path(__file__).resolve().parents[1]
 SETUP = ROOT / "setups/shared-albums-v1"
-SPEC = {"name": "social", "version": 1}
+SPEC = {"name": "whole-database", "version": 1}
 GROUPS = ("person", "circle", "db", "grant", "request")
 APP = "people"
 RECEIPT = "lastdb-app-install.json"

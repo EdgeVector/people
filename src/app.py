@@ -84,8 +84,8 @@ class PeopleApp:
             raise PeopleError("save this person's verified contact first")
         return keys
 
-    def create(self, name, whole=True):
-        return self.sharing.create(checked_name(name), whole=whole)
+    def create(self, name):
+        return self.sharing.create(checked_name(name))
 
     def setup_database(self, args):
         return self.setups.open(args)

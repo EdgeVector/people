@@ -49,8 +49,7 @@ COMMANDS = {
     "db": ("Shared databases", {
         "create": ("Create a whole-database share", (
             flag("name"), flag("--setup", help="Install a named setup, for example shared-albums"),
-            SETUP_VERSION,
-            flag("--filtered", action="store_true", help="Use the filtered albums and photos format"))),
+            SETUP_VERSION)),
         "verify": ("Verify a database against a named setup", (
             flag("database", help="Exact database ID"), flag("--setup", required=True), SETUP_VERSION,
             flag("--finish", action="store_true", help="Install missing setup schemas in an owned database"))),
@@ -71,7 +70,7 @@ COMMANDS = {
             DATABASE, PERSON, WRITE, RESOLVE, *APPLY)),
         "revoke": ("Revoke a person's access", (DATABASE, PERSON, APPLY[0])),
     }),
-    "invite": ("Seal an invitation for a person. A filtered share also grants reader access", (
+    "invite": ("Seal an invitation for a person with an existing grant", (
         DATABASE, PERSON, flag("--name", help="Contact name, with --contact"),
         flag("--contact", type=Path, help="Contact file for a new or updated contact"),
         flag("--out", type=Path, help="Write the sealed receipt to this file, readable by you only"))),

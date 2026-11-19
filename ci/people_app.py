@@ -6,10 +6,10 @@ import json
 import os
 from pathlib import Path
 import subprocess
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from node import Connection
-from support import OperationError, decode_json, require, retry, summary
+from support import CREDENTIALS_FILE, OperationError, decode_json, require, retry, summary
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -159,7 +159,7 @@ def install(publisher, root, revision):
             "Recipes start that install through the launcher.")
 
 
-def people(node, *arguments, stdin=None, refusal=None, refusals=()):
+def people(node, *arguments, stdin=None, refusal=None, refusals=(), notices=None):
     """Run one People command and decode its JSON result."""
     label = "_".join(arguments[:2] if arguments[0] in GROUPS else arguments[:1]).replace("-", "_")
     try:
@@ -181,7 +181,37 @@ def people(node, *arguments, stdin=None, refusal=None, refusals=()):
         status = output[0].partition(" returned HTTP ")[2][:3]
         suffix = f"_http_{status}" if status.isascii() and status.isdigit() else ""
         raise OperationError(f"people_{label}_failed{suffix}", command_output=output)
+    if notices is not None:
+        notices.append(output[0])
     return decode_json(result.stdout)
+
+
+def expect_setup_member_writes_pending(node, name):
+    """Create a setup on a node with no cloud account. The map stays pending."""
+    require(not (node.home / CREDENTIALS_FILE).exists(), "people_setup_pending_has_no_cloud_account")
+    notices = []
+    created = people(node, "db", "create", name, "--setup", "shared-albums", notices=notices)
+    database = created["databaseId"]
+    definitions = created["definitions"]
+    try:
+        parsed = str(UUID(database))
+    except ValueError:
+        parsed = ""
+    require(parsed == database and created["name"] == name and created["setupName"] == "shared-albums"
+            and created["version"] == 1 and created["memberWrites"] == "pending"
+            and set(definitions) == {"social/Album", "social/AlbumItem", "social/Photo", "social/Comment"}
+            and all(isinstance(item, str) and len(item) == 64 for item in definitions.values()),
+            "people_setup_pending_member_writes")
+    sentence = (
+        "The member-write map was not set because the share configuration is not confirmed, "
+        f"so once this node is connected run `people db verify {database} --setup shared-albums --finish`."
+    )
+    require(notices[0].strip() == sentence, "people_setup_pending_notice")
+    shown = people(node, "db", "show", database)
+    require(shown["database"]["id"] == database and shown["schemas"] == definitions,
+            "people_setup_pending_schemas")
+    summary(f"Setup `{database}` was created with no cloud account. The member-write map is pending.")
+    return created
 
 
 def pick(node, spec, intent, database):

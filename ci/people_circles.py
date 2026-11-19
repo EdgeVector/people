@@ -7,7 +7,7 @@ import sys
 import uuid
 
 from node import Connection
-from people_app import extend_member_writes, install, observe_access, owned_item, pick, read_records, sdk, people, write_owned
+from people_app import expect_setup_member_writes_pending, extend_member_writes, install, observe_access, owned_item, pick, read_records, sdk, people, write_owned
 from people_declarations import configure_bindings, external_changes, independent_update, revoke_roster
 from people_log_views import inbox, pending_positions, published_views, scope_for
 from support import OperationError, decode_json, require, retry, run_operation, summary
@@ -81,16 +81,13 @@ def transfer(programs, root, publisher, recipient, api_key):
     name = f"ci-circles-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
     if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
+    expect_setup_member_writes_pending(recipient, f"{name}-offline")
     created = sdk(publisher, "create-shared", name=name)
     require(created["sharingMode"] == "whole_database" and created["name"] == name, "circle_sdk_create")
     database = created["id"]
     report(f"Owned DEV mutation log {database} for {name} through the packaged SDK.")
     second = create_database(publisher, f"{name}-second")
-    placed = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
-    require(placed["databaseId"] == database, "circle_setup_finish")
     definitions = {schema: declare(publisher, database, schema) for schema in (ALBUM, COMMENT)}
-    definitions.update(placed["definitions"])
-    member_writes = extend_member_writes(publisher, database, {COMMENT: "shared", ALBUM: "owner_only"})
     write_owned(publisher, database, *(
         mutation(schema, definitions[schema], "seed", f"Initial {schema}") for schema in (ALBUM, COMMENT)))
     definition = declare(publisher, second, COMMENT)
@@ -105,9 +102,13 @@ def transfer(programs, root, publisher, recipient, api_key):
     sender = programs.command(publisher.home, ["share", "contact", "--out", str(root / "owner.contact")])["recipient_public_key"]
     require(reader != sender, "circle_two_identities")
     people(publisher, "person", "add", "Ana", "--node-key", reader, "--contact", str(contact), refusals=REFUSALS)
-    ready = retry("circle_cloud_ready", lambda: people(publisher, "db", "show", database),
-                  lambda row: row["sharing"].get("revision") == "0")
-    require(set(definitions).issubset(ready["schemas"]), "circle_schema_catalog_missing")
+    retry("circle_cloud_ready", lambda: people(publisher, "db", "show", database),
+          lambda row: row["sharing"].get("revision") == "0")
+    placed = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
+    require(placed["databaseId"] == database and placed["memberWrites"] != "pending", "circle_setup_finish")
+    definitions.update(placed["definitions"])
+    member_writes = extend_member_writes(publisher, database, {COMMENT: "shared", ALBUM: "owner_only"})
+    require(set(definitions).issubset(people(publisher, "db", "show", database)["schemas"]), "circle_schema_catalog_missing")
     retry("circle_second_cloud_ready", lambda: people(publisher, "db", "show", second),
           lambda row: row["sharing"].get("revision") == "0")
     try:
@@ -155,7 +156,6 @@ def share_with_circle(publisher, recipient, database, second, definitions, scope
     external_changes(publisher, circle, database, reader)
     independent_update(publisher, circle["id"], database, second, reader, COMMENT)
     report("One reusable circle granted distinct access to two databases and preserved an explicit revoke after an edit.")
-
 
 def create_database(owner, name):
     database = people(owner, "db", "create", name)["id"]

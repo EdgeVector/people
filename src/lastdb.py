@@ -48,9 +48,11 @@ def error_detail(body):
 
 # The only 503 People treats as "the cloud cannot confirm this yet".
 # LastDB at nightly 7c389d44f maps every failed member list, including the
-# cloud's not-found for a mutation log head that create has not uploaded,
-# to this sentence (config.rs set_config / read_config, database_share.rs).
-# A settings refusal keeps the service text, so it does not match.
+# cloud's not-found for a mutation log head that create has not uploaded
+# and a node with no cloud account, to this one sentence
+# (config.rs set_config / read_config, database_share.rs). The databases
+# extension does not say which of the two it is. A settings refusal keeps
+# the service text, so it does not match.
 SHARE_UNCONFIRMED = "share configuration is not confirmed"
 SHARE_CONFIRM_SECONDS = 120
 
@@ -61,14 +63,16 @@ def share_configuration_unconfirmed(error):
             and str(error).endswith(f"({SHARE_UNCONFIRMED})"))
 
 
-def call_until_share_confirmed(operation):
-    """Call until the share configuration can be confirmed, or 120 seconds pass.
+def call_until_share_confirmed(operation, seconds=None):
+    """Call until the share configuration can be confirmed, or the bound passes.
 
     The wait is only for `share configuration is not confirmed`. Another
     status, another 503, and a transport error all surface at once. When
-    the wait ends, the last 503 is raised unchanged.
+    the wait ends, the last 503 is raised unchanged. The default bound is
+    120 seconds, for a sharing update that must commit. A caller that must
+    not block on a node with no cloud account passes a shorter bound.
     """
-    deadline = time.monotonic() + SHARE_CONFIRM_SECONDS
+    deadline = time.monotonic() + (SHARE_CONFIRM_SECONDS if seconds is None else seconds)
     pause = 0.5
     while True:
         try:

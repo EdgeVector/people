@@ -169,14 +169,23 @@ so that rule applies to comments in the setup.
 
 `people db create family --setup shared-albums` creates a whole-database share
 and places `social/Album`, `social/AlbumItem`, `social/Photo`, and
-`social/Comment` through the `declare_schema` action. People records the new
-database ID before placing those schemas, and resumes setup by the same name. `people db verify ID --setup shared-albums`
-checks an owned or received share by its stable ID and reports the current
-definition IDs. Add `--finish` to install missing schemas in an owned
-database. Additive schema updates can introduce more fields under the same
-name. When replacing a record, read it first, retain the fields and keys you
-aren't editing, and send the replacement against the record's current
-revision.
+`social/Comment` through the `declare_schema` action. It also sets the
+member-write map when the node can confirm the share configuration. People
+cannot tell a node with no cloud account from a mutation log head that is
+still uploading: both replies are HTTP 503, `share configuration is not
+confirmed`. Create waits up to 20 seconds. If the configuration is still
+unconfirmed, the command does not fail. It has created the database and
+placed the schemas, the JSON result has `"memberWrites": "pending"`, and
+standard error says to run `people db verify ID --setup shared-albums
+--finish` once the node is connected. That command sets the map. People
+records the new database ID before placing those schemas, and resumes setup
+by the same name. `people db verify ID --setup shared-albums` checks an
+owned or received share by its stable ID and reports the current definition
+IDs. Add `--finish` to install missing schemas in an owned database and to
+set the member-write map. Additive schema updates can introduce more fields
+under the same name. When replacing a record, read it first, retain the
+fields and keys you aren't editing, and send the replacement against the
+record's current revision.
 
 ## Sharing proposals from apps
 

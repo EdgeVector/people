@@ -53,6 +53,11 @@ export interface PeopleDatabaseSetup {
   version: number;
   /** Verified installed definition IDs keyed by canonical schema name. */
   definitions: Record<string, string>;
+  /**
+   * The stored map when this command confirmed the share configuration.
+   * `pending` when it did not. Create still places the schemas in that case.
+   */
+  memberWrites: 'pending' | Record<string, 'owner_only' | 'own_records' | 'shared'>;
 }
 
 type PeopleGrantScope =

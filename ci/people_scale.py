@@ -66,8 +66,9 @@ def timed_revoke(node, database, key):
 
 def scale(programs, root, publisher, recipient, api_key):
     name = f"ci-scale-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
-    created = sdk(publisher, "create", name=name)
+    created = sdk(publisher, "create-shared", name=name)
     database = str(uuid.UUID(created["id"]))
+    require(created.get("sharingMode") == "whole_database", "people_scale_database")
     summary(f"Owned DEV mutation log `{database}` for `{name}`.")
     print(f"People DEV scale database {database}", flush=True)
     schema = json.loads((SETUP / "Album.json").read_text())
@@ -82,6 +83,9 @@ def scale(programs, root, publisher, recipient, api_key):
             "people_scale_dev_connection")
     publisher.keep_saved_credentials = True
     publisher.start()
+    finished = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
+    require(finished["databaseId"] == database and finished["memberWrites"] != "pending",
+            "people_scale_member_writes")
     contact = root / "reader.contact"
     reader_key = programs.command(recipient.home, [
         "share", "contact", "--out", str(contact),
@@ -94,11 +98,16 @@ def scale(programs, root, publisher, recipient, api_key):
     people(publisher, "person", "add", "Ana", "--node-key", reader_key, "--contact", str(contact))
     invited = revoked = False
     try:
+        preview = people(publisher, "grant", "set", database, "Ana", "--write", "read")
+        require(preview.get("applied") is False and isinstance(preview.get("token"), str),
+                "people_scale_grant_preview")
+        people(publisher, "grant", "set", database, "Ana", "--write", "read",
+               "--apply", "--token", preview["token"])
         receipt = sdk(publisher, "invite", database=name, recipient={"name": "Ana", "nodeKey": reader_key})
         invited = True
         received = sdk(recipient, "accept", publisher=publisher_key, name="scale", receipt=receipt)
-        require(received.get("id") == database and received.get("access") == "reader",
-                "people_scale_received")
+        require(received.get("id") == database and received.get("sharingMode") == "whole_database"
+                and received.get("access") == "reader", "people_scale_received")
         wait_for_album(recipient, database, 0)
 
         generated = [os.urandom(32).hex() for _ in range(MEMBERS)]

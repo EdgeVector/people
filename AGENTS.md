@@ -16,10 +16,9 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
   block lists the nine full names for read and for write.
 - `setups/shared-albums-v1/` holds the schema definitions of the
   `shared-albums` version 1 setup. This is the only copy of the
-  definitions. `EdgeVector/lastdb` keeps just the field names of the
-  `social` version 1 spec in `database_policy/src/lib.rs`, which decides
-  what a filtered share admits. A field added or renamed here needs the
-  same change there before a filtered share accepts it.
+  definitions. Shared databases are whole-database shares; member write
+  behaviour comes from the publisher's `memberWrites` map, not from a
+  LastDB share-spec catalog.
 
 ## Rules
 

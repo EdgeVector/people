@@ -10,15 +10,13 @@ import uuid
 from lastdb import LastDBError, PeopleError, no_cloud_account, raise_share_refusal
 
 
-SPEC = {"name": "social", "version": 1}
 TRANSPORT_ERRORS = (OSError, http.client.HTTPException)
 PENDING_SCHEMA = "people/SharingUpdate"
 UNREAD = object()
 
 
 def can_manage_sharing(database):
-    return database.get("kind") == "shareable" and (
-        database.get("sharingMode") == "whole_database" or database.get("spec") == SPEC)
+    return database.get("kind") == "shareable" and database.get("sharingMode") == "whole_database"
 
 
 class Sharing:
@@ -26,9 +24,10 @@ class Sharing:
         self.node = node
         self.people = people
 
-    def create(self, name, whole=False, *, request_id=None):
-        policy = {"sharingMode": "whole_database"} if whole else {"spec": SPEC}
-        return self.node.databases("create", name=name, kind="shareable", request_id=request_id, **policy)["database"]
+    def create(self, name, *, request_id=None):
+        return self.node.databases(
+            "create", name=name, kind="shareable", sharingMode="whole_database",
+            request_id=request_id)["database"]
 
     def databases(self):
         return self.node.databases("list")["databases"]
@@ -183,23 +182,6 @@ class Sharing:
         except LastDBError as error:
             raise_share_refusal(error)
             raise
-
-    def invite(self, selector, display_name, node_key, contact_path=None):
-        database_id = self.owned(selector)["id"]
-        publisher = self.node.own_key()
-        if publisher == node_key:
-            raise PeopleError("the database owner already has access")
-        if contact_path is None:
-            person = self.people.by_keys([node_key]).get(node_key)
-            if not person or not person.get("contact_code", "").startswith("lastdb-share-contact-v1."):
-                raise PeopleError("provide the recipient's verified contact file with --contact")
-            verified = self.node.verify_saved_contact(person["contact_code"], node_key)
-        else:
-            verified = self.node.verify_contact(contact_path, node_key)
-        contact_code = verified["contactCode"]
-        self.people.remember(node_key, display_name, contact_code)
-        revision = self.update_member(database_id, node_key, True)
-        return self.seal(database_id, node_key, contact_code, revision, publisher)
 
     def seal(self, database_id, node_key, contact_code, revision, publisher):
         response = self.share_call(lambda: self.node.databases(

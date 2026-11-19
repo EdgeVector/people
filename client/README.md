@@ -25,7 +25,6 @@ account.
 | `sealInvitation(databaseId, nodeKey)` | `people invite DATABASE PERSON` |
 | `acceptInvitation(invitation, publisherKey, name?)` | `people db accept`, with the invitation on standard input |
 | `revokeAccess(database, nodeKey)` | `people grant revoke --apply DATABASE PERSON` |
-| `createDatabase(name)` | `people db create --filtered NAME` |
 | `inviteReader(database, recipient)` | `people invite --name ... DATABASE PERSON` |
 
 A failed command throws `PeopleError` with `code: 'command_failed'` and
@@ -170,10 +169,7 @@ provisioning by the original local name. An owner can choose an existing
 incomplete setup by its ID and pass `finishExisting: true` to install missing
 schemas after checking compatibility.
 
-## Existing filtered shares
-
-`people.createDatabase(name)` uses the filtered `social` spec, version 1.
-`people.inviteReader(database, { name, nodeKey, contactPath })` grants reader
-access and returns a sealed invitation. People reuses verified contacts, so
-later reader invitations can omit `contactPath`. Use `sealInvitation` when the
-recipient already has a circle grant on a whole-database share.
+Grant access with a circle or `people grant set` before sealing. Then
+`people.inviteReader(database, { name, nodeKey, contactPath })` or
+`people.sealInvitation(databaseId, nodeKey)` returns a sealed invitation.
+People reuses verified contacts, so later invitations can omit `contactPath`.

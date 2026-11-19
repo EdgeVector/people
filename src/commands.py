@@ -50,7 +50,7 @@ def db_create(app, args):
     if args.setup:
         return app.setup_database({"setupName": args.setup, "requiredVersion": args.version,
                                    "localName": args.name})
-    return app.create(args.name, whole=not args.filtered)
+    return app.create(args.name)
 
 
 def db_verify(app, args):

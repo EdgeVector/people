@@ -20,11 +20,11 @@ lists the extension `databases`. The JSON body carries `action`:
 
 | Action | What People uses it for |
 | --- | --- |
-| `list`, `create`, `accept` | List databases, create one, accept an invitation |
+| `list`, `create`, `accept` | List databases, create one, accept a People consent code |
 | `schemas`, `declare_schema` | Read a database's schemas, place a setup schema |
 | `grant`, `revoke`, `grants` | Append or fold publisher-signed chain grants (authority) |
 | `heads`, `relays`, `bootstrap_relay` | Signed heads for comparison; relay URL bootstrap |
-| `invite` | Seal an invitation for a person who already has a chain grant |
+| `share_link` | Mint local open-link material that People wraps as a consent code (no ExeMem) |
 | `submit`, `submission_status` | A content app submits one proposal and reads its state. People's own commands do not call these |
 
 `declare_schema` sends `app_id` from the catalog on the app socket and on the
@@ -58,11 +58,12 @@ error prints one `people:` line on standard error and exits non-zero.
 | `db create NAME [--setup shared-albums]` | Create a whole-database share, optionally from a named setup |
 | `db verify ID --setup NAME [--finish]` | Verify a database against a named setup |
 | `db list`, `db show DB` | Databases. One database with its roster, circles, and pending change |
-| `db accept [FILE] --publisher KEY [--name NAME]` | Accept a sealed invitation |
+| `db accept [FILE] --publisher KEY [--name NAME]` | Accept a People consent code (file or stdin) |
 | `db retry [DB]` | Resume unfinished sharing updates |
 | `grant list [DB]`, `grant revoke DB PERSON` | Active grants. Revoke one person |
 | `grant set DB PERSON --write SCOPE`, `grant restore DB PERSON` | Give one person their own grant on a whole-database share. Restore a revoked person |
-| `invite DB PERSON [--out FILE]` | Seal an invitation for a person with an existing grant |
+| `invite DB PERSON [--out FILE]` | Mint a hand-off consent code after a chain grant |
+| `invite DB --open [--out FILE]` | Mint a Deliver consent code after `grant#any` |
 | `request submit`, `request status ID` | For apps: propose a sharing change, read its outcome |
 | `request list`, `request show ID`, `request approve ID`, `request decline ID` | For the owner: review and decide app proposals |
 | `pick-database --spec NAME --version N --intent read\|write` | List the databases an app can use, or select one |
@@ -126,7 +127,7 @@ across later circle edits.
 
 ```sh
 people circle set Family --members Ana,Bea --link family=social/Comment --link trips=read --apply
-people invite family Ana --out ana-invitation.json
+people invite family Ana --out ana-consent.txt
 ```
 
 For one person outside any circle, use a direct grant. It combines with the
@@ -139,14 +140,15 @@ people grant revoke family Cal --apply
 people grant restore family Cal --write read --apply
 ```
 
-`invite` produces JSON with `databaseId`, `entryHash`, `writerSeq`,
-`publisher`, and `invitation`. With `--out` it writes that receipt to a file
-only you can read. Without it the receipt goes to standard output. Hand the
-sealed receipt to the recipient. Keep it out of logs.
-The recipient accepts it with the publisher's independently verified key:
+`invite` mints a People consent code after a signed chain grant. The JSON has
+`databaseId`, `entryHash`, `writerSeq`, `publisher`, and `consent` (a
+`people-consent-v1.` string). With `--out` it writes only the consent code to
+a file only you can read. Copy and paste that code into the other People app.
+ExeMem and the relay never see the invite; they only see signed grant entries.
+The recipient accepts with the publisher's independently verified key:
 
 ```sh
-people db accept ana-invitation.json --publisher "$trusted_publisher_key" --name family
+people db accept ana-consent.txt --publisher "$trusted_publisher_key" --name family
 ```
 
 `db accept` returns LastDB's received database metadata. The local LastDB
@@ -259,8 +261,9 @@ reads that role from the grant (and from `selfAccess` once LastDB folds
 `GrantState`). Deliver uses `grant#any`/`read`. Org uses `write`. Share uses
 `submit` for proposals. A member with role `read` cannot submit. A circle
 link or a preset still chooses `read` or `submit` (or `write` for Org).
-LastDB authorizes `invite` from the folded chain grant, not from ExeMem
-members.
+People invites are hand-off consent codes. LastDB authorizes access from
+signed grant entries on the chain; there is no ExeMem invite or share-config
+path.
 
 ## Choosing a database for an app
 
@@ -301,8 +304,8 @@ A pull request gets syntax, manifest and command-grammar checks
   newest published nightly, or set it to a tag. Or set `lastdb_source_sha` to
   a 40-hex LastDB commit that includes the People UDS grants (mutually
   exclusive with `lastdb_release`); the job builds `lastdb`/`lastdbd` from
-  that public SHA (default on dispatch: the #1805 merge
-  `8f3ed348bc6e3954ca4cba123a52cca79ceaa463`). Set `relay_url` to the ExeMem
+  that public SHA (default on dispatch: the #1811 head (local open-link)
+  `ac194e2eb2bdce5f7df47fdf9bacca8f8c3347e2`). Set `relay_url` to the ExeMem
   DEV HTTP origin (`https://….execute-api….amazonaws.com`, no `/relay` path,
   no credentials). Empty `relay_url` uses `environments.dev.exemem_api` from
   the LastDB source under test.
@@ -344,7 +347,7 @@ the app socket, with `people` registered:
 | `people-share` | Save a contact, set up `shared-albums`, grant, invite, accept, read, revoke and restore on a whole-database share, with two scoped content clients |
 | `people-circles` | Circles grant submit from the chain role, Comment proposals, app sharing requests, grants changed outside People, direct grant, revoke and restore |
 | `people-prepare` | The manifest and schemas produce a valid unsigned registry declaration for this commit on a fresh node |
-| `people-link` | Deliver via `grant#any` read on the signed chain (no snapshots); revoke `any` stops later delivery |
+| `people-link` | Deliver via `grant#any` plus a People consent-code hand-off; LastDB refuses revoke of `any` |
 | `people-direct` | Org `write` members append directly, converge on one key, a reader is refused, and reducing to `submit` restores proposals |
 
 Where a recipe is the node owner, it keeps the owner socket. That is schema

@@ -74,7 +74,8 @@ try {
       throw new Error('Unknown SDK operation');
   }
   process.stdout.write(JSON.stringify(result));
-} catch {
-  // Keep invitation material and captured replies off the workflow output.
+} catch (error) {
+  const detail = error && typeof error.message === 'string' ? error.message : 'sdk operation failed';
+  process.stderr.write(`${detail}\n`);
   process.exitCode = 1;
 }

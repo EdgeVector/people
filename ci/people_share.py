@@ -49,7 +49,11 @@ def roster(node, database):
 def expect_roster(node, database, member=None):
     config = roster(node, database)
     expected = [member] if member else []
-    require(config.get("members") == expected, "people_applied_grants")
+    actual = config.get("members")
+    if actual != expected:
+        summary("people_applied_grants expected=%s actual=%s tip=%s"
+                % (expected, actual, {k: config.get(k) for k in ("entryHash", "writerSeq")}))
+    require(actual == expected, "people_applied_grants")
     return config
 
 
@@ -63,14 +67,15 @@ def grant_reader(publisher, database, person, reader_key):
     expect_roster(publisher, database, {"nodeKey": reader_key, "role": "read", "state": "active"})
 
 
-def seal_invite(publisher, database, contact, node_key):
+def mint_consent(publisher, database, contact, node_key):
     arguments = ["invite", database, node_key]
     if contact is not None:
         arguments.extend(["--name", "Ana", "--contact", str(contact)])
     receipt = people(publisher, *arguments)
     require(receipt["databaseId"] == database and isinstance(receipt.get("entryHash"), str)
-            and isinstance(receipt.get("invitation"), str) and bool(receipt["invitation"]),
-            "people_invitation_handoff")
+            and isinstance(receipt.get("consent"), str)
+            and receipt["consent"].startswith("people-consent-v1."),
+            "people_consent_handoff")
     return receipt
 
 
@@ -195,8 +200,11 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
         grant_reader(publisher, database, "Ana", reader_key)
         receipt = sdk(publisher, "invite", database=name, recipient={"name": "Ana", "nodeKey": reader_key})
         require(receipt["databaseId"] == database and receipt["publisher"] == publisher_key
-                and isinstance(receipt.get("entryHash"), str), "people_publisher_identity")
-        received = sdk(recipient, "accept", publisher=publisher_key, name="family", receipt=receipt)
+                and isinstance(receipt.get("entryHash"), str)
+                and isinstance(receipt.get("consent"), str), "people_publisher_identity")
+        # Hand the consent code string from publisher to recipient (no ExeMem invite).
+        received = sdk(recipient, "accept", publisher=publisher_key, name="family",
+                       receipt={"consent": receipt["consent"], "databaseId": receipt["databaseId"]})
         require(received.get("id") == database and received.get("sharingMode") == "whole_database"
                 and received.get("spec") == SCOPE, "people_received_metadata")
         wait_for_album(recipient, database, 0)
@@ -211,7 +219,7 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
         require(read_album(recipient, selections, database, "album-0", ALBUMS[0]), "people_apps_initial_album")
         grants = people(publisher, "grant", "list", database)
         require(len(grants) == 1 and grants[0]["user"] == "Ana", "people_remembers_contact")
-        seal_invite(publisher, database, None, reader_key)
+        mint_consent(publisher, database, None, reader_key)
         write_album(publisher, database, 1)
         wait_for_album(recipient, database, 1)
         require(read_album(recipient, selections, database, "album-1", ALBUMS[1]), "people_apps_second_album")
@@ -229,7 +237,7 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
                 and read_album(recipient, selections, database, "album-0", ALBUMS[0]), "people_apps_revoked")
         wait_for_album(recipient, database, 0)
         restore_reader(publisher, database, "Ana", reader_key)
-        seal_invite(publisher, database, None, reader_key)
+        mint_consent(publisher, database, None, reader_key)
         wait_for_album(recipient, database, 2)
         observe_access(recipient, database, "active")
         require(read_album(recipient, selections, database, "album-2", ALBUMS[2]), "people_apps_caught_up")
@@ -239,10 +247,10 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
             revoke(publisher, database, reader_key)
             print("Final signed revoke acknowledged.", flush=True)
             summary("Final signed revoke acknowledged.")
-    message = ("People created a whole-database share and sealed an invitation after a signed "
-               "reader grant. The recipient accepted, replayed the chain, kept the binding across "
-               "restart, read later albums, had the next append rejected after revoke, and caught "
-               "up after restore.")
+    message = ("People created a whole-database share and minted a consent code after a signed "
+               "reader grant. The recipient accepted the code, replayed the chain, kept the binding "
+               "across restart, read later albums, had the next append rejected after revoke, and "
+               "caught up after restore.")
     print(message, flush=True)
     summary(message)
     report_content_flow()
@@ -267,14 +275,14 @@ def check_role_and_overview(programs, root, publisher, other_database, name, con
         people(publisher, "grant", "revoke", database, reader_key, "--apply")
         expect_roster(publisher, database, {"nodeKey": reader_key, "role": "revoked", "state": "revoked"})
         restore_reader(publisher, database, "Ana", reader_key)
-        seal_invite(publisher, database, None, reader_key)
+        mint_consent(publisher, database, None, reader_key)
         check_overview(publisher, other_database, database, reader_key)
     finally:
         applied = roster(publisher, database)
         if any(member["state"] == "active" for member in applied.get("members", [])):
             people(publisher, "grant", "revoke", database, reader_key, "--apply")
     expect_roster(publisher, database, {"nodeKey": reader_key, "role": "revoked", "state": "revoked"})
-    message = ("People refused to seal with no grant, restored a revoked submitter as a "
+    message = ("People refused to invite with no grant, restored a revoked submitter as a "
                "reader, and kept chain grants visible while another database was unavailable.")
     print(message, flush=True)
     summary(message)

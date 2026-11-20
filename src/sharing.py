@@ -4,11 +4,16 @@ People asks LastDB to author grant and revoke entries. The signed chain is
 the only authority. People may carry signed heads for comparison and
 bootstrap the first relay URL from a publisher-signed relays entry. A grant
 that exists only in People is never treated as access.
+
+Invites are People consent codes: a hand-off string the publisher mints after
+a chain grant, and the recipient pastes into their People app. ExeMem and the
+relay never see an invite; they only see signed grant entries on the chain.
 """
 
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import base64
 import http.client
 import json
 import uuid
@@ -20,6 +25,9 @@ TRANSPORT_ERRORS = (OSError, http.client.HTTPException)
 PENDING_SCHEMA = "people/SharingUpdate"
 ROLES = frozenset({"read", "submit", "write", "revoked"})
 UNREAD = object()
+CONSENT_PREFIX = "people-consent-v1."
+OPEN_PREFIX = "lastdb-read-v1."
+MAX_CONSENT = 8192
 
 
 def can_manage_sharing(database):
@@ -264,24 +272,41 @@ class Sharing:
             raise_chain_refusal(error)
             raise
 
-    def seal(self, database_id, node_key, contact_code, tip, publisher):
-        response = self.chain_call(lambda: self.node.databases(
-            "invite", database=database_id, contactCode=contact_code, expectedNodeKey=node_key))
-        if response["databaseId"] != database_id or not response.get("invitation"):
-            raise PeopleError("LastDB returned a mismatched invitation")
-        return {"databaseId": database_id, "entryHash": tip["entryHash"],
-                "writerSeq": tip.get("writerSeq"), "publisher": publisher,
-                "invitation": response["invitation"]}
+    def mint_consent(self, database_id, tip, publisher):
+        """Mint a People consent code. LastDB only supplies the open-link material."""
+        response = self.chain_call(lambda: self.node.databases("share_link", database=database_id))
+        link = response.get("link")
+        if (response.get("databaseId") != database_id or not isinstance(link, str)
+                or not link.startswith(OPEN_PREFIX)):
+            raise PeopleError("LastDB returned a mismatched open link")
+        payload = {
+            "v": 1,
+            "databaseId": database_id,
+            "publisher": publisher,
+            "entryHash": tip["entryHash"],
+            "open": link,
+        }
+        if "writerSeq" in tip:
+            payload["writerSeq"] = tip["writerSeq"]
+        return {
+            "databaseId": database_id,
+            "entryHash": tip["entryHash"],
+            "writerSeq": tip.get("writerSeq"),
+            "publisher": publisher,
+            "consent": encode_consent(payload),
+        }
 
-    def accept(self, receipt, publisher, name):
-        if receipt.get("publisher") != publisher:
-            raise PeopleError("invitation publisher differs from the trusted publisher")
+    def accept(self, consent, publisher, name):
+        payload = decode_consent(consent)
+        if payload["publisher"] != publisher:
+            raise PeopleError("consent publisher differs from the trusted publisher")
         database = self.chain_call(lambda: self.node.databases(
-            "accept", invitation=receipt["invitation"], publisher=publisher,
-            database_id=receipt["databaseId"], name=name))["database"]
+            "accept", link=payload["open"], name=name))["database"]
+        if database.get("id") != payload["databaseId"]:
+            raise PeopleError("LastDB accepted a different database")
         # Member discovers the first relay from the publisher-signed relays entry.
         try:
-            self.bootstrap_relay(receipt["databaseId"])
+            self.bootstrap_relay(payload["databaseId"])
         except LastDBError as error:
             if not no_cloud_account(error):
                 raise
@@ -302,11 +327,53 @@ def tip_receipt(current, node_key, role):
             "writerSeq": current.get("writerSeq"), "nodeKey": node_key, "role": role}
 
 
-def read_invitation(stream):
-    raw = stream.read(8193)
-    if len(raw) > 8192:
-        raise PeopleError("invitation receipt exceeds its size limit")
-    value = json.loads(raw)
-    if not isinstance(value, dict):
-        raise PeopleError("expected a People invitation receipt")
-    return value
+def encode_consent(payload):
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    body = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    code = f"{CONSENT_PREFIX}{body}"
+    if len(code) > MAX_CONSENT:
+        raise PeopleError("consent code exceeds its size limit")
+    return code
+
+
+def decode_consent(code):
+    if not isinstance(code, str) or not code.startswith(CONSENT_PREFIX):
+        raise PeopleError("expected a People consent code")
+    body = code[len(CONSENT_PREFIX):]
+    if not body or len(code) > MAX_CONSENT:
+        raise PeopleError("expected a People consent code")
+    try:
+        padded = body + "=" * (-len(body) % 4)
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        payload = json.loads(raw)
+    except (ValueError, json.JSONDecodeError) as error:
+        raise PeopleError("expected a People consent code") from error
+    if (not isinstance(payload, dict) or payload.get("v") != 1
+            or not isinstance(payload.get("databaseId"), str)
+            or not isinstance(payload.get("publisher"), str)
+            or not isinstance(payload.get("entryHash"), str) or not payload["entryHash"]
+            or not isinstance(payload.get("open"), str)
+            or not payload["open"].startswith(OPEN_PREFIX)):
+        raise PeopleError("expected a People consent code")
+    if "writerSeq" in payload and type(payload["writerSeq"]) is not int:
+        raise PeopleError("expected a People consent code")
+    return payload
+
+
+def read_consent(stream):
+    """Read a consent code: raw string, JSON string, or JSON object with `consent`."""
+    raw = stream.read(MAX_CONSENT + 1)
+    if len(raw) > MAX_CONSENT:
+        raise PeopleError("consent code exceeds its size limit")
+    text = raw.decode("utf-8").strip()
+    if text.startswith(CONSENT_PREFIX):
+        return text
+    try:
+        value = json.loads(text)
+    except (ValueError, UnicodeError) as error:
+        raise PeopleError("expected a People consent code") from error
+    if isinstance(value, str) and value.startswith(CONSENT_PREFIX):
+        return value
+    if isinstance(value, dict) and isinstance(value.get("consent"), str):
+        return value["consent"]
+    raise PeopleError("expected a People consent code")

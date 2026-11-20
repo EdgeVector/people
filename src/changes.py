@@ -135,30 +135,36 @@ def retry(app, database=None, review=None):
         return {**reusable.edit_locked({**args, "token": preview["token"]}, apply=True), "applied": True}
 
 
-def invite(app, database, person, *, name=None, contact=None, out=None):
-    """Seal an invitation for a person who already has a grant."""
-    receipt = seal(app, database, person, name, contact)
+def invite(app, database, person=None, *, name=None, contact=None, open_link=False, out=None):
+    """Mint a People consent code after a chain grant (or Deliver grant#any)."""
+    receipt = mint_invite(app, database, person, name, contact, open_link)
     if out is None:
         return receipt
-    # The receipt lets its recipient open the database. Keep it readable by the owner only.
+    # The consent lets its recipient open the database. Keep the file owner-readable only.
     descriptor = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         os.fchmod(descriptor, 0o600)
-        json.dump(receipt, stream, sort_keys=True)
+        stream.write(receipt["consent"])
     kept = {key: receipt[key] for key in ("databaseId", "entryHash", "writerSeq", "publisher")
             if key in receipt}
     return {**kept, "out": str(out)}
 
 
-def seal(app, database, person, name, contact):
+def mint_invite(app, database, person, name, contact, open_link):
     database = app.sharing.owned(database)
+    if open_link:
+        if person is not None or contact is not None or name is not None:
+            raise PeopleError("use --open alone to mint a Deliver consent code")
+        return app.open_consent(database)
+    if person is None:
+        raise PeopleError("name the person to invite, or pass --open for Deliver")
     if contact is not None:
         if name is None:
             raise PeopleError("give --name with --contact")
         key = app.remember_file(person, name, contact)["nodeKey"]
     else:
         key = app.resolve_people([person])[0]
-    return app.seal(database, key)
+    return app.invite_consent(database, key)
 
 
 def grant_role(scope):

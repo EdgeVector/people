@@ -1,8 +1,8 @@
 """Prove direct member writes against the DEV cloud.
 
-People saves the contacts, grants Submit or read, seals the invitations, and
-accepts them. The node sets write and the member-write map, takes the member
-writes, and submits the later proposal. People has no command for those steps.
+People saves the contacts, grants Submit or read, mints consent codes, and
+accepts them by hand-off. The node takes member writes and submits proposals.
+People has no command for those socket steps.
 """
 
 import os
@@ -55,19 +55,24 @@ def grant(publisher, database, person, scope, granted):
     granted.append(person)
 
 
-def handoff(publisher, member, database, person, publisher_key, local_name):
+def handoff(publisher, member, database, person, publisher_key, local_name, role, node_key):
+    from people_chain_views import expect_member, expect_self_role
     receipt = people(publisher, "invite", database, person)
     matched_db = receipt.get("databaseId") == database
     matched_publisher = receipt.get("publisher") == publisher_key
-    invitation = receipt.get("invitation")
-    invitation_ok = isinstance(invitation, str) and bool(invitation)
-    if not (matched_db and matched_publisher and invitation_ok):
-        fail("direct_invitation", "database=%s publisher=%s invitation=%s" % (
-            yes(matched_db), yes(matched_publisher), yes(invitation_ok)))
-    accepted = people(member, "db", "accept", "--publisher", publisher_key, "--name", local_name, stdin=receipt)
+    consent = receipt.get("consent")
+    consent_ok = isinstance(consent, str) and consent.startswith("people-consent-v1.")
+    if not (matched_db and matched_publisher and consent_ok):
+        fail("direct_consent", "database=%s publisher=%s consent=%s" % (
+            yes(matched_db), yes(matched_publisher), yes(consent_ok)))
+    # Wait for the signed grant on the publisher chain before the member reads the relay.
+    expect_member(publisher, database, node_key, role=role)
+    accepted = people(member, "db", "accept", "--publisher", publisher_key, "--name", local_name,
+                      stdin=consent)
     if accepted.get("id") != database or accepted.get("sharingMode") != "whole_database":
         fail("direct_accept", "id=%s mode=%s" % (
             yes(accepted.get("id") == database), label(accepted.get("sharingMode"))))
+    expect_self_role(member, database, role)
 
 
 def enroll(programs, publisher, members, root):
@@ -200,8 +205,11 @@ def share(programs, root, publisher, member_a, member_b, member_c, database, def
     grant(publisher, database, "Ana", "write", granted)
     grant(publisher, database, "Bo", "write", granted)
     grant(publisher, database, "Cam", "read", granted)
-    for person, node, local_name in (("Ana", member_a, "from-ana"), ("Bo", member_b, "from-bo"), ("Cam", member_c, "from-cam")):
-        handoff(publisher, node, database, person, publisher_key, local_name)
+    for person, node, local_name, role in (
+            ("Ana", member_a, "from-ana", "write"),
+            ("Bo", member_b, "from-bo", "write"),
+            ("Cam", member_c, "from-cam", "read")):
+        handoff(publisher, node, database, person, publisher_key, local_name, role, keys[person])
     named = (("publisher", publisher), ("Ana", member_a), ("Bo", member_b))
     for person, node in members:
         watch_rows(((person, node),), database, "seed", "direct_seed",

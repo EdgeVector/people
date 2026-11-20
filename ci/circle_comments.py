@@ -1,13 +1,16 @@
-"""Comment ownership, schema upgrade, and proposal settlement for people-circles."""
+"""Comment ownership, schema upgrade, and proposal settlement for people-circles.
+
+Proposals settle on the signed chain. Status comes from submission_status and
+local record reads — not ExeMem mutation-log inbox/list APIs.
+"""
 
 import uuid
 
 from circle_report import (
-    cell, check, comment_line, delete_line, fail, inbox_line, mark, require_absent, saw, status_text,
-    views_line, wait, wait_pages,
+    cell, check, comment_line, delete_line, fail, mark, require_absent, saw, status_text,
+    wait, wait_pages,
 )
 from people_app import observe_access, owned_item, pick, read_records, sdk, write_owned
-from people_log_views import inbox, pending_positions, published_views
 from support import OperationError, summary
 
 
@@ -79,14 +82,14 @@ def refuse_created_by(node, database, definition):
             fail("created_by_write_refused", saw("write", accepted=1))
 
 
-def exercise_comment_ownership(publisher, recipient, database, definitions, scope, reader):
+def exercise_comment_ownership(publisher, recipient, database, definitions, reader):
     recipe = _recipe()
     definition = definitions[recipe.STANDARD_COMMENT]
     owner_comment = standard_comment(database, definition, "publisher", "Publisher wrote this", reader)
     mine = standard_comment(database, definition, "receiver", "Ana wrote this", "spoofed-author")
     refuse_created_by(publisher, database, definition)
     write_owned(publisher, database, owner_comment)
-    queue_and_restart(publisher, recipient, database, scope, [mine])
+    queue_and_restart(publisher, recipient, database, [mine])
     expected = {"publisher": "Publisher wrote this", "receiver": "Ana wrote this"}
     named = (("publisher", publisher), ("Ana", recipient))
     pages = _comments(named, database, expected, "standard_comments_visible")
@@ -98,7 +101,7 @@ def exercise_comment_ownership(publisher, recipient, database, definitions, scop
     edit = replace_comment(mine, moderated["receiver"], "Edited by Ana")
     edit["record"]["author_id"] = "spoofed-editor"
     cross_author = replace_comment(owner_comment, moderated["publisher"], "Forbidden edit")
-    queue_and_restart(publisher, recipient, database, scope, [cross_author, edit])
+    queue_and_restart(publisher, recipient, database, [cross_author, edit])
     expected["receiver"] = "Edited by Ana"
     pages = _comments(named, database, expected, "standard_comment_edit_applied")
     _authors(pages, reader, "spoofed-editor", "standard_edited_author_unchanged", False)
@@ -106,14 +109,14 @@ def exercise_comment_ownership(publisher, recipient, database, definitions, scop
     current = next(page for (name, _node), page in zip(named, pages) if name == "Ana")["receiver"]
     delete = {**mine, "mutation_type": "delete", "record": {},
               "expected": {"type": "revision", "revision": current["revision"]}}
-    queue_and_restart(publisher, recipient, database, scope, [delete])
+    queue_and_restart(publisher, recipient, database, [delete])
     expected.pop("receiver")
     wait_pages(named, "standard_own_delete_applied", lambda node: _delete_view(node, database),
                _gone(expected), delete_line)
     recipe.report("Ana edited and deleted her own comment. The publisher discarded her edit of the publisher's comment.")
 
 
-def exercise_upgrade(publisher, recipient, database, previous, scope):
+def exercise_upgrade(publisher, recipient, database, previous):
     recipe = _recipe()
     new = recipe.declare(publisher, database, recipe.COMMENT, expanded=True)
     check(new != previous, "circle_schema_upgrade_new_definition", saw("definition", changed=new != previous))
@@ -129,7 +132,7 @@ def exercise_upgrade(publisher, recipient, database, previous, scope):
                   record={**current["fields"], "text": "After edit"},
                   source_file_name="replacement.txt", metadata={"share_author": "replacement-author"})
     stale = {**update, "record": {**update["record"], "text": "Stale edit"}}
-    queue_and_restart(publisher, recipient, database, scope, [update, stale])
+    queue_and_restart(publisher, recipient, database, [update, stale])
     for name, node in (("publisher", publisher), ("Ana", recipient)):
         recipe.wait_text(name, node, database, recipe.COMMENT, "upgrade", "After edit",
                          "circle_upgraded_record_edited")
@@ -144,20 +147,17 @@ def exercise_upgrade(publisher, recipient, database, previous, scope):
     return new
 
 
-def exercise_reader(publisher, recipient, database, definitions, scope):
+def exercise_reader(publisher, recipient, database, definitions):
     recipe = _recipe()
     observe_access(recipient, database, "active", role="read")
     recipe.wait_text("Ana", recipient, database, recipe.COMMENT, "allowed", "From Ana",
                      "circle_reader_retains_access")
     update = recipe.mutation(recipe.COMMENT, definitions[recipe.COMMENT], "reader", "Reader submission")
     recipe.refuse_submission(recipient, database, update)
-    page = inbox(publisher, scope, database)
-    entries = page.get("entries") if isinstance(page, dict) else None
-    check(entries == [], "circle_reader_not_queued", inbox_line(page))
     for name, node in (("publisher", publisher), ("Ana", recipient)):
         require_absent(name, recipe.query(node, database, recipe.COMMENT, "reader"),
                        "circle_reader_write_discarded", "text")
-    recipe.report("Ana's read role was refused with 403. The publisher's inbox did not receive the proposal, and neither node has the reader record.")
+    recipe.report("Ana's read role was refused with 403. Neither node has the reader record.")
 
 
 def verify_results(recipient, database, queued):
@@ -168,49 +168,42 @@ def verify_results(recipient, database, queued):
     _recipe().report("The receiving SDK read the final outcome of each of Ana's proposals by UUID.")
 
 
-def verify_settled_retry(publisher, recipient, database, scope, update, mutation_id):
+def verify_settled_retry(publisher, recipient, database, update, mutation_id):
     recipe = _recipe()
-    pending = inbox(publisher, scope, database)
-    entries = pending.get("entries") if isinstance(pending, dict) else None
-    check(entries == [], "circle_retry_starts_with_settled_inbox", inbox_line(pending))
-    published = published_views(recipient, scope, database)
+    del publisher
     _same_database(recipient, database)
     recipe.submit(recipient, database, update, mutation_id=mutation_id)
     results = sdk(recipient, "submission-status", database=database, ids=[mutation_id])
     found = _statuses(results)
     check(found == ["published"], "circle_retry_preserves_outcome",
           "statuses=%s n=%s" % (status_text(found), len(found)))
-    again = inbox(publisher, scope, database)
-    check(again == pending, "circle_retry_does_not_enqueue",
-          "%s was=%s" % (inbox_line(again), inbox_line(pending)))
-    views = published_views(recipient, scope, database)
-    check(views == published, "circle_retry_does_not_publish",
-          "%s was=%s" % (views_line(views), views_line(published)))
-    recipe.report("Ana retried a settled mutation with the same UUID and operation. Its published outcome and both log positions stayed the same.")
+    recipe.report("Ana retried a settled mutation with the same UUID and operation. Its published outcome stayed the same.")
 
 
-def queue_and_restart(publisher, recipient, database, scope, updates, *, check_status=False):
+def queue_and_restart(publisher, recipient, database, updates, *, check_status=False):
+    """Submit while the publisher is down; settle via submission_status after restart."""
     recipe = _recipe()
     _same_database(recipient, database)
     publisher.stop()
     try:
-        page = inbox(publisher, scope, database)
-        entries = page.get("entries") if isinstance(page, dict) else None
-        check(entries == [], "circle_empty_inbox", inbox_line(page))
-        published_before = published_views(recipient, scope, database)
         queued = [recipe.submit(recipient, database, update) for update in updates]
         if check_status:
             results = sdk(recipient, "submission-status", database=database, ids=queued)
             found = _statuses(results)
             check(isinstance(results, list) and all(item == "submitted" for item in found),
                   "circle_sdk_proposals_pending", "statuses=%s n=%s" % (status_text(found), len(found)))
-        through = pending_positions(publisher, recipient, scope, database, queued, published_before)
-        summary("ExeMem queued the mutations in the publisher's inbox and refused Ana's inbox read and settlement. The published log did not advance.")
+        summary("Proposals stayed submitted on the member while the publisher was stopped.")
     finally:
         publisher.start()
-    wait("circle_publisher_consumed_submissions", lambda: inbox(publisher, scope, database),
-         lambda page: _consumed(page, through),
-         lambda page, reason: "%s %s through=%s" % (reason, inbox_line(page), mark(through)))
+
+    def settled(rows):
+        statuses = _statuses(rows)
+        return len(statuses) == len(queued) and all(item in ("published", "discarded") for item in statuses)
+
+    wait("circle_publisher_consumed_submissions",
+         lambda: sdk(recipient, "submission-status", database=database, ids=queued),
+         settled,
+         lambda rows, reason: "%s statuses=%s" % (reason, status_text(_statuses(rows))))
     return queued
 
 
@@ -256,12 +249,3 @@ def _same_database(node, database):
     match = isinstance(chosen, dict) and chosen.get("databaseId") == database
     check(match, "circle_picker_write", saw("picker", id_match=match))
 
-
-def _consumed(page, through):
-    if not isinstance(page, dict):
-        return False
-    try:
-        cursor = int(page["next"])
-    except (KeyError, TypeError, ValueError):
-        return False
-    return cursor >= through and page.get("entries") == []

@@ -164,8 +164,16 @@ def people(node, *arguments, stdin=None, refusal=None, refusals=(), notices=None
     """Run one People command and decode its JSON result."""
     label = "_".join(arguments[:2] if arguments[0] in GROUPS else arguments[:1]).replace("-", "_")
     try:
+        if stdin is None:
+            payload = None
+        elif isinstance(stdin, (bytes, bytearray)):
+            payload = bytes(stdin)
+        elif isinstance(stdin, str):
+            payload = stdin.encode()
+        else:
+            payload = json.dumps(stdin).encode()
         result = subprocess.run([*command(node), *arguments],
-                                input=None if stdin is None else json.dumps(stdin).encode(),
+                                input=payload,
                                 capture_output=True, env=launcher_env(node), timeout=180)
     except subprocess.TimeoutExpired as error:
         raise OperationError(f"people_{label}_deadline", command_output=command_streams(error)) from error

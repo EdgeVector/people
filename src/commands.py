@@ -5,7 +5,7 @@ import sys
 
 import changes
 from lastdb import PeopleError
-from sharing import read_invitation
+from sharing import read_consent
 
 
 def person_add(app, args):
@@ -68,11 +68,11 @@ def db_show(app, args):
 
 def db_accept(app, args):
     if args.receipt in (None, "-"):
-        receipt = read_invitation(sys.stdin.buffer)
+        consent = read_consent(sys.stdin.buffer)
     else:
         with open(args.receipt, "rb") as stream:
-            receipt = read_invitation(stream)
-    return app.accept(receipt, args.publisher, args.name)
+            consent = read_consent(stream)
+    return app.accept(consent, args.publisher, args.name)
 
 
 def db_retry(app, args):
@@ -98,7 +98,8 @@ def grant_restore(app, args):
 
 
 def invite(app, args):
-    return changes.invite(app, args.database, args.person, name=args.name, contact=args.contact, out=args.out)
+    return changes.invite(app, args.database, args.person, name=args.name, contact=args.contact,
+                          open_link=args.open, out=args.out)
 
 
 def request_submit(app, _args):

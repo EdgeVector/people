@@ -18,7 +18,6 @@ from node import Connection
 from people_app import expect_setup_offline, install, observe_access, read_records, sdk, people, write_owned
 from share_node import ensure_relay, hex32_id
 from people_declarations import configure_bindings, external_changes, independent_update, revoke_roster
-from people_log_views import scope_for
 from support import OperationError, decode_json, run_operation, summary
 
 SCOPE = {"name": "whole-database", "version": 1}
@@ -185,7 +184,6 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
     write_owned(publisher, second, mutation(COMMENT, definition, "seed", "Second database"))
     publisher.stop()
     connect(programs, publisher, api_key)
-    scope = scope_for(publisher, api_key)
     publisher.keep_saved_credentials = True
     publisher.start()
     ensure_relay(publisher, database)
@@ -206,7 +204,7 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
           saw("schemas", missing=len(set(definitions) - shown)))
     wait_cloud("circle_second_cloud_ready", publisher, second)
     try:
-        share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender)
+        share_with_circle(publisher, recipient, database, second, definitions, reader, sender)
     finally:
         failed = sys.exc_info()[0] is not None
         cleanup_error = None
@@ -220,7 +218,7 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
             raise cleanup_error
 
 
-def share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender):
+def share_with_circle(publisher, recipient, database, second, definitions, reader, sender):
     created = edit_circle(publisher)
     circle = created["circle"]
     check(revisions(created) == {} and circle["name"] == "Family" and not circle["members"]
@@ -233,17 +231,22 @@ def share_with_circle(publisher, recipient, database, second, definitions, scope
           "circle_grant_applied", saw("grant", statuses=[row.get("status") for row in granted["databases"]]))
     receipt = sdk(publisher, "seal", database=database, nodeKey=reader)
     check(receipt["publisher"] == sender and receipt["databaseId"] == database
-          and isinstance(receipt.get("entryHash"), str),
-          "circle_sdk_sealed_invitation",
-          saw("seal", publisher=receipt.get("publisher") == sender, database=receipt.get("databaseId") == database,
-              tip=isinstance(receipt.get("entryHash"), str)))
-    exercise(publisher, recipient, database, receipt, definitions, scope)
-    exercise_comment_ownership(publisher, recipient, database, definitions, scope, reader)
+          and isinstance(receipt.get("entryHash"), str)
+          and isinstance(receipt.get("consent"), str) and receipt["consent"].startswith("people-consent-v1."),
+          "circle_sdk_consent_code",
+          saw("invite", publisher=receipt.get("publisher") == sender,
+              database=receipt.get("databaseId") == database,
+              tip=isinstance(receipt.get("entryHash"), str),
+              consent=isinstance(receipt.get("consent"), str)))
+    exercise(publisher, recipient, database, receipt, definitions)
+    exercise_comment_ownership(publisher, recipient, database, definitions, reader)
     second_receipt = people(publisher, "invite", second, reader)
-    people(recipient, "db", "accept", "--publisher", sender, "--name", "second", stdin=second_receipt)
+    # CI hands the consent code string between nodes (not an ExeMem invitation).
+    people(recipient, "db", "accept", "--publisher", sender, "--name", "second",
+           stdin=second_receipt["consent"])
     wait_text("Ana", recipient, second, COMMENT, "seed", "Second database", "circle_second_database_read")
     observe_access(recipient, second, "active")
-    definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT], scope)
+    definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT])
     read_links = ("--link", f"{database}=read", "--link", f"{second}={COMMENT}")
     preview = people(publisher, "circle", "set", "Family", *read_links)
     people(publisher, "grant", "revoke", second, reader, "--apply")
@@ -253,7 +256,7 @@ def share_with_circle(publisher, recipient, database, second, definitions, scope
     check(all(row.get("status") == "confirmed" for row in reduced["databases"]),
           "circle_reader_applied", saw("reduce", statuses=[row.get("status") for row in reduced["databases"]]))
     observe_access(recipient, second, "revoked")
-    exercise_reader(publisher, recipient, database, definitions, scope)
+    exercise_reader(publisher, recipient, database, definitions)
     external_changes(publisher, circle, database, reader)
     independent_update(publisher, circle["id"], database, second, reader, COMMENT)
     report("One reusable circle granted distinct access to two databases and preserved an explicit revoke after an edit.")
@@ -315,7 +318,7 @@ def connect(programs, publisher, api_key):
               saved=receipt.get("credentials_saved")))
 
 
-def exercise(publisher, recipient, database, receipt, definitions, scope):
+def exercise(publisher, recipient, database, receipt, definitions):
     accepted = sdk(recipient, "accept", receipt=receipt, publisher=receipt["publisher"], name="family")
     check(accepted["id"] == database and accepted["sharingMode"] == "whole_database", "circle_received_database",
           saw("accept", id_match=accepted.get("id") == database, mode=accepted.get("sharingMode")))
@@ -326,7 +329,7 @@ def exercise(publisher, recipient, database, receipt, definitions, scope):
     check(second_app == album, "independent_app_opens_same_published_album",
           "%s %s" % (cell("Ana", album, "text"), cell("viewer", second_app, "text")))
     check(album["fields"]["text"] == f"Initial {ALBUM}", "circle_sdk_read_shared_content", cell("Ana", album, "text"))
-    report("The packaged SDK used People to create a whole-database share, seal a circle invitation and accept it. The recipient read shared data through the LastDB SDK.")
+    report("The packaged SDK handed a People consent code between nodes and the recipient read shared data through the LastDB SDK.")
     observe_access(recipient, database, "active", role="submit")
     sdk_access = next(row for row in sdk(recipient, "list-databases") if row["id"] == database)["selfAccess"]
     check(isinstance(sdk_access, dict) and sdk_access.get("role") == "submit"
@@ -338,10 +341,9 @@ def exercise(publisher, recipient, database, receipt, definitions, scope):
         created,
         mutation(COMMENT, definitions[COMMENT], "seed", "A create cannot replace the seed"),
     ]
-    queued = queue_and_restart(publisher, recipient, database, scope, updates,
-                               check_status=True)
+    queued = queue_and_restart(publisher, recipient, database, updates, check_status=True)
     verify_results(recipient, database, queued)
-    verify_settled_retry(publisher, recipient, database, scope, updates[0], queued[0])
+    verify_settled_retry(publisher, recipient, database, updates[0], queued[0])
     for name, node in (("publisher", publisher), ("Ana", recipient)):
         wait_text(name, node, database, COMMENT, "allowed", "From Ana", "circle_authorized_write_applied")
         wait_text(name, node, database, COMMENT, "seed", f"Initial {COMMENT}", "circle_invalid_create_discarded")

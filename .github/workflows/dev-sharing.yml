@@ -360,14 +360,41 @@ jobs:
           mkdir -m 700 "$bin"
           cp -f target/release/lastdb target/release/lastdbd "$bin/"
           chmod 700 "$bin/lastdb" "$bin/lastdbd"
-          version="0.0.0-dev.g${LASTDB_SOURCE_COMMIT:0:9}"
+          # lastdb_node/build.rs stamps FOLDDB_BUILD_VERSION, which both
+          # `--version` lines and the daemon build field report. Precedence
+          # matches resolve_version: a non-empty override, then a People ref
+          # named v<digit>…, then `git describe --tags --always --dirty
+          # --abbrev=9` with one leading v stripped when the next character
+          # is a digit. The old 0.0.0-dev.g<sha> label never matched that stamp.
+          version="${FOLDDB_BUILD_VERSION_OVERRIDE:-}"
+          version="${version#"${version%%[![:space:]]*}"}"
+          version="${version%"${version##*[![:space:]]}"}"
+          if [ -z "$version" ]; then
+            ref_name="${GITHUB_REF_NAME:-}"
+            if [[ "$ref_name" =~ ^v([0-9].*)$ ]]; then
+              version="${BASH_REMATCH[1]}"
+            else
+              version="$(git describe --tags --always --dirty --abbrev=9)"
+              if [[ "$version" =~ ^v([0-9].*)$ ]]; then
+                version="${BASH_REMATCH[1]}"
+              fi
+            fi
+          fi
+          test -n "$version"
+          for name in lastdb lastdbd; do
+            got="$("$bin/$name" --version)"
+            if [ "$got" != "$name $version" ]; then
+              printf '%s --version is %q, expected %q\n' "$name" "$got" "$name $version" >&2
+              exit 1
+            fi
+          done
           {
             printf 'LASTDB_BIN=%s\n' "$bin"
             printf 'LASTDB_VERSION=%s\n' "$version"
           } >> "$GITHUB_ENV"
           {
             printf 'LastDB pinned SHA: `%s`\n\n' "$LASTDB_SOURCE_COMMIT"
-            printf 'LastDB version label: `%s`\n\n' "$version"
+            printf 'LastDB version: `%s`\n\n' "$version"
             printf 'People source: `%s`\n' "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Resolve RELAY_URL

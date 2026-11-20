@@ -15,12 +15,10 @@ name: DEV sharing
 # defaults to environments.dev.exemem_api from the LastDB source under test
 # (same origin #927 prove-dev-relay uses).
 #
-# Cloud steps run on main. A workflow_dispatch of
-# cursor/match-lastdb-build-version-0b0f is also allowed so this unmerged
-# binary_version fix can be proved once against DEV. A pull request gets the
-# syntax job and never receives cloud credentials. The sharing job checks out
-# the event commit. It does not check out another ref: that would run branch
-# code in the privileged job.
+# Cloud steps run only on main. A pull request gets the syntax job and never
+# receives cloud credentials. The sharing job checks out the event commit.
+# It does not check out another ref: that would run branch code in the
+# privileged main job.
 #
 # LastDB build under test:
 # - Empty inputs → pin 8f3ed348… (#1805 on main) until a post-#1805 nightly
@@ -96,10 +94,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           SELECTED_REF: ${{ github.ref }}
-        run: |
-          set -euo pipefail
-          test "$SELECTED_REF" = refs/heads/main \
-            || test "$SELECTED_REF" = refs/heads/cursor/match-lastdb-build-version-0b0f
+        run: test "$SELECTED_REF" = refs/heads/main
       - name: Check the recipe syntax
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
@@ -121,10 +116,7 @@ jobs:
 
   new-nightly:
     name: New nightly
-    if: >-
-      github.event_name != 'pull_request' &&
-      (github.ref == 'refs/heads/main' ||
-       github.ref == 'refs/heads/cursor/match-lastdb-build-version-0b0f')
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

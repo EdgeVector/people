@@ -215,14 +215,105 @@ jobs:
             echo "- Sharing: run ($BUILD_MODE)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  sharing:
-    name: ${{ matrix.mode }} in DEV
+  # One cargo build for the whole matrix. Serial legs used to rebuild from
+  # source six times (~5 min each); prove_dev_sharing's 60-minute wait then
+  # cancelled the run before people-link / people-direct finished. fail-fast
+  # is already false — the cancel was the wall clock, not matrix fail-fast.
+  build-lastdb:
+    name: Build LastDB (source pin)
     needs: [recipe-syntax, new-nightly]
     if: >-
       !cancelled() &&
       needs.recipe-syntax.result == 'success' &&
       needs.new-nightly.result == 'success' &&
-      needs.new-nightly.outputs.run_sharing == 'true'
+      needs.new-nightly.outputs.run_sharing == 'true' &&
+      needs.new-nightly.outputs.build_mode == 'source'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      TARGET: x86_64-unknown-linux-gnu
+      BUILD_MODE: source
+    outputs:
+      version: ${{ steps.stamp.outputs.version }}
+    steps:
+      - name: Check out LastDB at the pinned SHA
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          LASTDB_SOURCE_SHA: ${{ needs.new-nightly.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$LASTDB_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          source="$RUNNER_TEMP/lastdb-source"
+          env -u GH_TOKEN -u GITHUB_TOKEN git clone --no-checkout --filter=blob:none \
+            https://github.com/EdgeVector/lastdb.git "$source"
+          git -C "$source" checkout --detach "$LASTDB_SOURCE_SHA"
+          test "$(git -C "$source" rev-parse HEAD)" = "$LASTDB_SOURCE_SHA"
+          test -f "$source/lastdb_node/environments.json"
+          printf 'LASTDB_SOURCE=%s\n' "$source" >> "$GITHUB_ENV"
+          printf 'LASTDB_SOURCE_COMMIT=%s\n' "$LASTDB_SOURCE_SHA" >> "$GITHUB_ENV"
+      - name: Install Rust for a pinned LastDB SHA build
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build LastDB binaries from the pinned SHA
+        id: stamp
+        env:
+          CARGO_TERM_COLOR: always
+          CARGO_BUILD_JOBS: "2"
+        run: |
+          set -euo pipefail
+          cd "$LASTDB_SOURCE"
+          cargo build --locked --release -p lastdb_node --bins
+          bin="$RUNNER_TEMP/lastdb-bin"
+          mkdir -m 700 "$bin"
+          cp -f target/release/lastdb target/release/lastdbd "$bin/"
+          chmod 700 "$bin/lastdb" "$bin/lastdbd"
+          version="${FOLDDB_BUILD_VERSION_OVERRIDE:-}"
+          version="${version#"${version%%[![:space:]]*}"}"
+          version="${version%"${version##*[![:space:]]}"}"
+          if [ -z "$version" ]; then
+            ref_name="${GITHUB_REF_NAME:-}"
+            if [[ "$ref_name" =~ ^v([0-9].*)$ ]]; then
+              version="${BASH_REMATCH[1]}"
+            else
+              version="$(git describe --tags --always --dirty --abbrev=9)"
+              if [[ "$version" =~ ^v([0-9].*)$ ]]; then
+                version="${BASH_REMATCH[1]}"
+              fi
+            fi
+          fi
+          test -n "$version"
+          for name in lastdb lastdbd; do
+            got="$("$bin/$name" --version)"
+            if [ "$got" != "$name $version" ]; then
+              printf '%s --version is %q, expected %q\n' "$name" "$got" "$name $version" >&2
+              exit 1
+            fi
+          done
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$version" > "$bin/VERSION"
+          {
+            printf 'LastDB pinned SHA: `%s`\n\n' "$LASTDB_SOURCE_COMMIT"
+            printf 'LastDB version: `%s`\n\n' "$version"
+            printf 'People source: `%s`\n' "$GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload LastDB binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: lastdb-bin-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lastdb-bin/
+          if-no-files-found: error
+          retention-days: 1
+
+  sharing:
+    name: ${{ matrix.mode }} in DEV
+    needs: [recipe-syntax, new-nightly, build-lastdb]
+    if: >-
+      !cancelled() &&
+      needs.recipe-syntax.result == 'success' &&
+      needs.new-nightly.result == 'success' &&
+      needs.new-nightly.outputs.run_sharing == 'true' &&
+      (needs.new-nightly.outputs.build_mode != 'source' || needs.build-lastdb.result == 'success')
     environment: dev-sharing
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ needs.new-nightly.outputs.build_mode == 'source' && 45 || 15 }}
@@ -337,6 +428,8 @@ jobs:
           LASTDB_SOURCE_SHA: ${{ needs.new-nightly.outputs.source_sha }}
         run: |
           set -euo pipefail
+          # Source tree only: environments.json + app SDK. Binaries come from
+          # the build-lastdb artifact so each matrix leg does not recompile.
           [[ "$LASTDB_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           source="$RUNNER_TEMP/lastdb-source"
           env -u GH_TOKEN -u GITHUB_TOKEN git clone --no-checkout --filter=blob:none \
@@ -346,45 +439,23 @@ jobs:
           test -f "$source/lastdb_node/environments.json"
           printf 'LASTDB_SOURCE=%s\n' "$source" >> "$GITHUB_ENV"
           printf 'LASTDB_SOURCE_COMMIT=%s\n' "$LASTDB_SOURCE_SHA" >> "$GITHUB_ENV"
-      - name: Install Rust for a pinned LastDB SHA build
+      - name: Download LastDB binaries
         if: env.BUILD_MODE == 'source'
-        uses: dtolnay/rust-toolchain@stable
-      - name: Build LastDB binaries from the pinned SHA
+        uses: actions/download-artifact@v4
+        with:
+          name: lastdb-bin-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lastdb-bin
+      - name: Install downloaded LastDB binaries
         if: env.BUILD_MODE == 'source'
         env:
-          CARGO_TERM_COLOR: always
-          CARGO_BUILD_JOBS: "2"
+          EXPECTED_VERSION: ${{ needs.build-lastdb.outputs.version }}
         run: |
           set -euo pipefail
-          # Binaries must include People UDS grant/revoke/grants/heads/relays
-          # (lastdb #1805). No credentials; public clone only.
-          cd "$LASTDB_SOURCE"
-          cargo build --locked --release -p lastdb_node --bins
           bin="$RUNNER_TEMP/lastdb-bin"
-          mkdir -m 700 "$bin"
-          cp -f target/release/lastdb target/release/lastdbd "$bin/"
-          chmod 700 "$bin/lastdb" "$bin/lastdbd"
-          # lastdb_node/build.rs stamps FOLDDB_BUILD_VERSION, which both
-          # `--version` lines and the daemon build field report. Precedence
-          # matches resolve_version: a non-empty override, then a People ref
-          # named v<digit>…, then `git describe --tags --always --dirty
-          # --abbrev=9` with one leading v stripped when the next character
-          # is a digit. The old 0.0.0-dev.g<sha> label never matched that stamp.
-          version="${FOLDDB_BUILD_VERSION_OVERRIDE:-}"
-          version="${version#"${version%%[![:space:]]*}"}"
-          version="${version%"${version##*[![:space:]]}"}"
-          if [ -z "$version" ]; then
-            ref_name="${GITHUB_REF_NAME:-}"
-            if [[ "$ref_name" =~ ^v([0-9].*)$ ]]; then
-              version="${BASH_REMATCH[1]}"
-            else
-              version="$(git describe --tags --always --dirty --abbrev=9)"
-              if [[ "$version" =~ ^v([0-9].*)$ ]]; then
-                version="${BASH_REMATCH[1]}"
-              fi
-            fi
-          fi
+          version="$(tr -d '[:space:]' < "$bin/VERSION")"
           test -n "$version"
+          test "$version" = "$EXPECTED_VERSION"
+          chmod 700 "$bin/lastdb" "$bin/lastdbd"
           for name in lastdb lastdbd; do
             got="$("$bin/$name" --version)"
             if [ "$got" != "$name $version" ]; then
@@ -398,7 +469,7 @@ jobs:
           } >> "$GITHUB_ENV"
           {
             printf 'LastDB pinned SHA: `%s`\n\n' "$LASTDB_SOURCE_COMMIT"
-            printf 'LastDB version: `%s`\n\n' "$version"
+            printf 'LastDB version: `%s` (shared build)\n\n' "$version"
             printf 'People source: `%s`\n' "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Resolve RELAY_URL
@@ -467,7 +538,7 @@ jobs:
   # This job is that same issue lifecycle for People.
   notify:
     name: Notify on failure
-    needs: [recipe-syntax, new-nightly, sharing]
+    needs: [recipe-syntax, new-nightly, build-lastdb, sharing]
     if: >-
       always() &&
       !cancelled() &&
@@ -475,6 +546,7 @@ jobs:
       (github.event_name == 'schedule' || github.event_name == 'push') &&
       (needs.recipe-syntax.result == 'failure' ||
        needs.new-nightly.result == 'failure' ||
+       needs.build-lastdb.result == 'failure' ||
        needs.sharing.result == 'failure' ||
        needs.sharing.result == 'success')
     runs-on: ubuntu-24.04
@@ -491,7 +563,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_FILE: dev-sharing.yml
-          JOB_RESULTS: ${{ needs.recipe-syntax.result }} ${{ needs.new-nightly.result }} ${{ needs.sharing.result }}
+          JOB_RESULTS: ${{ needs.recipe-syntax.result }} ${{ needs.new-nightly.result }} ${{ needs.build-lastdb.result }} ${{ needs.sharing.result }}
           SHARING_RESULT: ${{ needs.sharing.result }}
           NIGHTLY_TAG: ${{ needs.new-nightly.outputs.tag }}
         run: python3 ci/notify_scheduled_failure.py

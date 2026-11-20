@@ -100,10 +100,11 @@ class Sharing:
     def configuration(self, database_id):
         """Owner view: chain members, heads for comparison, and relay list."""
         grants = self.grants(database_id)
+        heads = self.heads(database_id).get("heads") or []
         kept = {
             "databaseId": database_id,
             "members": members_from_grants(grants),
-            "heads": self.heads(database_id).get("heads") or [],
+            "heads": heads,
             "relays": self.relays(database_id).get("urls") or [],
         }
         if "any" in grants:
@@ -114,6 +115,14 @@ class Sharing:
         entry = grants.get("entryHash")
         if entry is not None:
             kept["entryHash"] = entry
+        elif heads:
+            # No grant entry yet (birth/relays only). Policy-only confirms still
+            # need a durable tip; use the highest publisher stream head.
+            top = max(heads, key=lambda row: row.get("writerSeq") or 0)
+            if isinstance(top.get("entryHash"), str) and top["entryHash"]:
+                kept["entryHash"] = top["entryHash"]
+                if tip is None and top.get("writerSeq") is not None:
+                    kept["writerSeq"] = top["writerSeq"]
         return kept
 
     def all_configurations(self, selector):

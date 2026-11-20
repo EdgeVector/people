@@ -109,7 +109,9 @@ def failure(error):
         raw = stderr if stderr else stdout
         # people-direct appends daemon lines and log-sync files after this marker.
         # Other recipes stay on the short tail.
-        limit = 65536 if isinstance(raw, str) and "\ndirect-logs\n" in raw else 600
+        # Direct evidence keeps the full dump. Other recipes keep enough for a
+        # relay status+body and a raw sharing-status JSON (previously 600).
+        limit = 65536 if isinstance(raw, str) and "\ndirect-logs\n" in raw else 2000
         value["detail"] = redact_command_text(raw, limit)
     return value
 

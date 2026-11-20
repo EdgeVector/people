@@ -138,7 +138,8 @@ def attach(error, roster, database, evidence=False):
     dump = guarded(lambda: node_dump(roster, database)[:300], "dump=failed")
     text = existing + MARKER + dump if existing else "nodes=" + dump
     if not evidence:
-        error.command_output = (text[:560], "")
+        # Keep relay last_error and raw SDK status bodies readable.
+        error.command_output = (text[:2000], "")
         return
     text += "\npublish\n" + guarded(lambda: member_publish(roster, database), "publish=unread")
     text += "\ndirect-logs\n" + guarded(lambda: failure_evidence(roster, database), "evidence=failed")

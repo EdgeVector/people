@@ -32,8 +32,35 @@ def write_album(node, database, index):
 
 
 def wait_for_album(node, database, index):
-    retry(f"people_album_{index}", lambda: album(node, database, index),
-          lambda rows: len(rows) == 1 and rows[0]["fields"]["title"] == ALBUMS[index])
+    stage = f"people_album_{index}"
+
+    def load():
+        rows = album(node, database, index)
+        sample = {"rows": rows, "count": len(rows) if isinstance(rows, list) else None}
+        try:
+            sharing = people(node, "db", "show", database).get("sharing")
+        except OperationError as error:
+            sample["show"] = str(error)
+            return sample
+        if isinstance(sharing, dict):
+            sample["members"] = sharing.get("members")
+            sample["writerSeq"] = sharing.get("writerSeq")
+            sample["entryHash"] = sharing.get("entryHash")
+            sample["status"] = sharing.get("status")
+        try:
+            from direct_nodes import sync_text
+            sample["cloud"] = sync_text(node, database)
+        except OperationError as error:
+            sample["cloud"] = str(error)
+        return sample
+
+    def matches(sample):
+        rows = sample.get("rows") if isinstance(sample, dict) else None
+        return (isinstance(rows, list) and len(rows) == 1
+                and isinstance(rows[0].get("fields"), dict)
+                and rows[0]["fields"].get("title") == ALBUMS[index])
+
+    retry(stage, load, matches)
 
 
 def roster(node, database):

@@ -8,7 +8,10 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
   the command grammar, and `src/commands.py` maps each command to an
   operation. Database and sharing calls use `POST /v1/x/databases`. Record
   calls use `POST /v1/read` and `POST /v1/write`.
-- `ci/` holds the DEV sharing recipes run by `dev-sharing.yml`.
+- `ci/` holds the DEV sharing recipes run by `dev-sharing.yml`. Database and
+  stream/device ids are Hex32 (64 lowercase hex), not UUID. DEV sharing takes
+  a `RELAY_URL` (ExeMem DEV origin for `/relay/v1`) and a LastDB nightly or a
+  pinned main SHA that includes the People UDS grants.
 - `lastdb-app.json` is the app manifest and the source of People's private
   schema definitions. Each schema object uses a local name such as `Person`.
   The installer stores that name as `people/<Name>` from the manifest

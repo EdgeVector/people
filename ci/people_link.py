@@ -12,8 +12,8 @@ import uuid
 
 from people_app import install, people, write_owned
 from share_node import (
-    accept_link, await_empty_grants, bootstrap_relay, connect, declare, grant_public_read,
-    keyed, mint_link, no_cloud_account, note, proposal, refuse_proposal, report,
+    accept_link, await_empty_grants, connect, declare, ensure_relay, grant_public_read,
+    hex32_id, keyed, mint_link, no_cloud_account, note, proposal, refuse_proposal, report,
     revoke_public_read, until, write_member,
 )
 from support import OperationError, require, run_operation
@@ -26,8 +26,8 @@ CLOSED = "After grant#any revoked"
 
 def create(publisher, name):
     created = people(publisher, "db", "create", name)
-    database = str(uuid.UUID(created["id"]))
-    require(database == created["id"] and created.get("sharingMode") == "whole_database", "link_database")
+    database = hex32_id(created["id"], "link_database")
+    require(created.get("sharingMode") == "whole_database", "link_database_mode")
     report("Owned DEV database %s for Deliver %s." % (database, name))
     return database
 
@@ -84,7 +84,7 @@ def operation(programs, root, publisher, recipient, api_key):
     write_owned(publisher, database, note(BEFORE, "before"))
     connect(programs, publisher, api_key)
     await_empty_grants(publisher, database)
-    bootstrap_relay(publisher, database)
+    ensure_relay(publisher, database)
     opened = False
     failed = False
     try:

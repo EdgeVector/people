@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import re
-from uuid import uuid4
+import secrets
 
 from lastdb import LastDBError, PeopleError
 
@@ -102,7 +102,9 @@ class Setups:
         if existing is None:
             if any(row.get("name") == name for row in self.sharing.databases()):
                 raise PeopleError("that name is already in use; select the owned database by ID to finish setup")
-        fields = {"database_id": existing["id"] if existing else str(uuid4()), "ready": False}
+        # Create Idempotency-Key is the Hex32 database id (64 lowercase hex).
+        fields = {"database_id": existing["id"] if existing else secrets.token_bytes(32).hex(),
+                  "ready": False}
         try:
             written = self.node.write_record(SCHEMA, key, fields, None)
         except LastDBError as error:

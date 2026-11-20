@@ -2,25 +2,37 @@ name: DEV sharing
 
 # Real sharing checks for People. Each mode starts fresh LastDB nodes on the
 # runner, connects the publisher to the DEV cloud, and drives this commit's
-# `people` command through a published LastDB nightly. people-direct starts
-# four nodes. The other modes start a publisher and one recipient.
+# `people` command against the ExeMem DEV relay (`/relay/v1`). people-direct
+# starts four nodes. The other modes start a publisher and one recipient.
 # The recipes are in ci/ and their node helpers in ci/lib/. A checkout of
-# EdgeVector/lastdb at the nightly's exact source commit supplies the compiled
-# endpoint profile, lastdb_node/environments.json, and the app SDK's data
-# client for reading shared records. The People client under test is client/.
+# EdgeVector/lastdb (nightly source commit, or a pinned SHA that includes
+# People UDS grants) supplies the compiled endpoint profile,
+# lastdb_node/environments.json, and the app SDK's data client.
+#
+# RELAY_URL is the ExeMem DEV HTTP API origin (no path, no credentials).
+# Recipes author that URL into a publisher-signed `relays` entry and call
+# bootstrap_relay. Empty input defaults to environments.dev.exemem_api from
+# the LastDB source under test (same origin #927 prove-dev-relay uses).
 #
 # Cloud steps run only on main. A pull request gets the syntax job and never
 # receives cloud credentials. The sharing job checks out the event commit.
 # It does not check out another ref: that would run branch code in the
 # privileged main job.
 #
-# new-nightly selects the newest published LastDB nightly. A sharing job
-# records that it started by saving the Actions cache key
-# nightly-attempted-<tag>. That key is immutable, and nothing in this
-# workflow executes the cached file. Only the first attempt of the minute-41
-# poll skips a tag that already has the key. The 09:23 run, a push, a manual
-# dispatch, and a human re-run always start sharing. A poll that is cancelled
-# while pending never starts the sharing job, so it does not save the key.
+# LastDB build under test:
+# - Empty inputs → newest published nightly (must be post-#1803 / include #1805).
+# - lastdb_release → that nightly tag.
+# - lastdb_source_sha → build lastdb/lastdbd from that exact public commit
+#   (use a main SHA that includes https://github.com/EdgeVector/lastdb/pull/1805).
+# lastdb_release and lastdb_source_sha are mutually exclusive.
+#
+# new-nightly selects the LastDB build. A sharing job records that it started
+# by saving the Actions cache key nightly-attempted-<tag> (nightly path only).
+# That key is immutable, and nothing in this workflow executes the cached
+# file. Only the first attempt of the minute-41 poll skips a tag that already
+# has the key. The 09:23 run, a push, a manual dispatch, and a human re-run
+# always start sharing. A poll that is cancelled while pending never starts
+# the sharing job, so it does not save the key.
 on:
   push:
     branches: [main]
@@ -39,7 +51,13 @@ on:
         options: [all, people-share, people-circles, people-scale, people-prepare, people-link, people-direct]
         default: all
       lastdb_release:
-        description: "LastDB nightly tag, for example nightly-20261116-3484b912b. Empty selects the newest published nightly"
+        description: "LastDB nightly tag, for example nightly-20261116-3484b912b. Empty selects the newest published nightly (unless lastdb_source_sha is set)"
+        type: string
+      lastdb_source_sha:
+        description: "Pin a 40-hex LastDB commit (must include #1805 UDS). Builds binaries from that SHA. Mutually exclusive with lastdb_release"
+        type: string
+      relay_url:
+        description: "ExeMem DEV relay origin (https://….execute-api….amazonaws.com), no /relay path and no credentials. Empty uses environments.dev.exemem_api from the LastDB source under test"
         type: string
       people_install_revision:
         description: "For a sharing mode, optionally install this exact signed People source from the registry"
@@ -103,24 +121,50 @@ jobs:
       actions: read
     outputs:
       tag: ${{ steps.select.outputs.tag }}
+      source_sha: ${{ steps.select.outputs.source_sha }}
+      build_mode: ${{ steps.select.outputs.build_mode }}
       run_sharing: ${{ steps.decide.outputs.run_sharing }}
     steps:
-      - name: Select the newest published nightly
+      - name: Select the LastDB build under test
         id: select
         env:
           GH_TOKEN: ${{ github.token }}
           LASTDB_RELEASE: ${{ inputs.lastdb_release }}
+          LASTDB_SOURCE_SHA: ${{ inputs.lastdb_source_sha }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           set -euo pipefail
-          tag="$LASTDB_RELEASE"
+          release="${LASTDB_RELEASE:-}"
+          sha="${LASTDB_SOURCE_SHA:-}"
+          if [ -n "$release" ] && [ -n "$sha" ]; then
+            echo "lastdb_release and lastdb_source_sha are mutually exclusive" >&2
+            exit 2
+          fi
+          if [ -n "$sha" ]; then
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            printf 'build_mode=source\n' >> "$GITHUB_OUTPUT"
+            printf 'source_sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+            printf 'tag=\n' >> "$GITHUB_OUTPUT"
+            printf 'poll=false\n' >> "$GITHUB_OUTPUT"
+            {
+              echo "### LastDB source pin"
+              echo
+              printf -- '- SHA: `%s`\n' "$sha"
+              printf -- '- Event: `%s`\n' "$EVENT_NAME"
+              echo "- Build: cargo from that commit (must include #1805)"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          tag="$release"
           if [ -z "$tag" ]; then
             tag="$(gh api 'repos/EdgeVector/lastdb/releases?per_page=30' \
               --jq '[.[] | select(.draft == false and (.tag_name | startswith("nightly-")))] | sort_by(.published_at) | last | .tag_name')"
           fi
           [[ "$tag" =~ ^nightly-[0-9]{8}-[0-9a-f]{9}$ ]]
+          printf 'build_mode=nightly\n' >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'source_sha=\n' >> "$GITHUB_OUTPUT"
           # github.event.schedule tells the two crons apart. Any other event,
           # the daily cron, and a re-run (attempt > 1) always share.
           if [ "$EVENT_NAME" = "schedule" ] && [ "$EVENT_SCHEDULE" = "41 * * * *" ] && [ "$GITHUB_RUN_ATTEMPT" = "1" ]; then
@@ -150,6 +194,7 @@ jobs:
           POLL: ${{ steps.select.outputs.poll }}
           CACHE_HIT: ${{ steps.attempted.outputs.cache-hit }}
           TAG: ${{ steps.select.outputs.tag }}
+          BUILD_MODE: ${{ steps.select.outputs.build_mode }}
         run: |
           set -euo pipefail
           # A miss leaves cache-hit empty. Only an exact hit skips.
@@ -158,7 +203,7 @@ jobs:
             printf -- '- Sharing: skipped, `%s` was already attempted\n' "$TAG" >> "$GITHUB_STEP_SUMMARY"
           else
             printf 'run_sharing=true\n' >> "$GITHUB_OUTPUT"
-            echo "- Sharing: run" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Sharing: run ($BUILD_MODE)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   sharing:
@@ -171,7 +216,7 @@ jobs:
       needs.new-nightly.outputs.run_sharing == 'true'
     environment: dev-sharing
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: ${{ needs.new-nightly.outputs.build_mode == 'source' && 45 || 15 }}
     permissions:
       contents: read
       actions: write
@@ -182,12 +227,14 @@ jobs:
         mode: ${{ fromJSON(needs.recipe-syntax.outputs.modes) }}
     env:
       TARGET: x86_64-unknown-linux-gnu
+      BUILD_MODE: ${{ needs.new-nightly.outputs.build_mode }}
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Write the attempt marker
+        if: env.BUILD_MODE == 'nightly'
         env:
           TAG: ${{ needs.new-nightly.outputs.tag }}
         run: |
@@ -197,6 +244,7 @@ jobs:
           printf '%s\n' "$TAG" > "$RUNNER_TEMP/nightly-attempt/tag.txt"
       - name: See whether this nightly was already marked
         id: prior
+        if: env.BUILD_MODE == 'nightly'
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/nightly-attempt
@@ -207,12 +255,13 @@ jobs:
       # never stored cannot be skipped. A same-job re-read is not used: it
       # can miss a key that a later poll would see.
       - name: Save the attempt marker
-        if: steps.prior.outputs.cache-hit != 'true'
+        if: env.BUILD_MODE == 'nightly' && steps.prior.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/nightly-attempt
           key: nightly-attempted-${{ needs.new-nightly.outputs.tag }}
       - name: Download and verify the LastDB nightly
+        if: env.BUILD_MODE == 'nightly'
         env:
           GH_TOKEN: ${{ github.token }}
           LASTDB_RELEASE: ${{ needs.new-nightly.outputs.tag }}
@@ -258,6 +307,7 @@ jobs:
             printf 'People source: `%s`\n' "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Check out LastDB at the nightly's source commit
+        if: env.BUILD_MODE == 'nightly'
         env:
           GIT_TERMINAL_PROMPT: "0"
         run: |
@@ -271,6 +321,63 @@ jobs:
           test "$(git -C "$source" rev-parse HEAD)" = "$LASTDB_SOURCE_COMMIT"
           test -f "$source/lastdb_node/environments.json"
           printf 'LASTDB_SOURCE=%s\n' "$source" >> "$GITHUB_ENV"
+      - name: Check out LastDB at the pinned SHA
+        if: env.BUILD_MODE == 'source'
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+          LASTDB_SOURCE_SHA: ${{ needs.new-nightly.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$LASTDB_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          source="$RUNNER_TEMP/lastdb-source"
+          env -u GH_TOKEN -u GITHUB_TOKEN git clone --no-checkout --filter=blob:none \
+            https://github.com/EdgeVector/lastdb.git "$source"
+          git -C "$source" checkout --detach "$LASTDB_SOURCE_SHA"
+          test "$(git -C "$source" rev-parse HEAD)" = "$LASTDB_SOURCE_SHA"
+          test -f "$source/lastdb_node/environments.json"
+          printf 'LASTDB_SOURCE=%s\n' "$source" >> "$GITHUB_ENV"
+          printf 'LASTDB_SOURCE_COMMIT=%s\n' "$LASTDB_SOURCE_SHA" >> "$GITHUB_ENV"
+      - name: Install Rust for a pinned LastDB SHA build
+        if: env.BUILD_MODE == 'source'
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build LastDB binaries from the pinned SHA
+        if: env.BUILD_MODE == 'source'
+        env:
+          CARGO_TERM_COLOR: always
+          CARGO_BUILD_JOBS: "2"
+        run: |
+          set -euo pipefail
+          # Binaries must include People UDS grant/revoke/grants/heads/relays
+          # (lastdb #1805). No credentials; public clone only.
+          cd "$LASTDB_SOURCE"
+          cargo build --locked --release -p lastdb_node --bins
+          bin="$RUNNER_TEMP/lastdb-bin"
+          mkdir -m 700 "$bin"
+          cp -f target/release/lastdb target/release/lastdbd "$bin/"
+          chmod 700 "$bin/lastdb" "$bin/lastdbd"
+          version="0.0.0-dev.g${LASTDB_SOURCE_COMMIT:0:9}"
+          {
+            printf 'LASTDB_BIN=%s\n' "$bin"
+            printf 'LASTDB_VERSION=%s\n' "$version"
+          } >> "$GITHUB_ENV"
+          {
+            printf 'LastDB pinned SHA: `%s`\n\n' "$LASTDB_SOURCE_COMMIT"
+            printf 'LastDB version label: `%s`\n\n' "$version"
+            printf 'People source: `%s`\n' "$GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Resolve RELAY_URL
+        env:
+          INPUT_RELAY_URL: ${{ inputs.relay_url }}
+        run: |
+          set -euo pipefail
+          url="${INPUT_RELAY_URL:-}"
+          url="${url%/}"
+          if [ -z "$url" ]; then
+            url="$(jq -r '.environments.dev.exemem_api' "$LASTDB_SOURCE/lastdb_node/environments.json")"
+          fi
+          [[ "$url" =~ ^https://[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com$ ]]
+          printf 'RELAY_URL=%s\n' "$url" >> "$GITHUB_ENV"
+          printf 'ExeMem DEV relay origin: `%s` (`/relay/v1`)\n' "$url" >> "$GITHUB_STEP_SUMMARY"
       - name: Build the LastDB app SDK for content reads
         if: matrix.mode == 'people-share' || matrix.mode == 'people-circles' || matrix.mode == 'people-scale'
         run: |
@@ -310,6 +417,8 @@ jobs:
             *) exit 2 ;;
           esac
           export PYTHONPATH="$GITHUB_WORKSPACE/ci/lib"
+          # RELAY_URL is already in the environment from Resolve RELAY_URL.
+          # people-prepare does not need the relay; recipes that share do.
           python3 "ci/$recipe.py" --bin-dir "$LASTDB_BIN" --version "$LASTDB_VERSION"
 
   # LastDB's notify-scheduled-failure.yml checks out the caller and runs

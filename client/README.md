@@ -30,7 +30,8 @@ account.
 A failed command throws `PeopleError` with `code: 'command_failed'` and
 People's own `people: ...` line as the message. Output of an unexpected shape
 throws `PeopleError` with `code: 'invalid_response'`. A database result is the
-row People prints, which is LastDB's own database row; `id` is always present.
+row People prints, which is LastDB's own database row; `id` is a Hex32
+(64 lowercase hex), never a UUID. Sharing-request ids remain UUIDs.
 
 ## Share an app's own database
 

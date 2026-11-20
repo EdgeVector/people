@@ -16,6 +16,7 @@ from circle_report import (
 from direct_nodes import clip_public
 from node import Connection
 from people_app import expect_setup_offline, install, observe_access, read_records, sdk, people, write_owned
+from share_node import ensure_relay, hex32_id
 from people_declarations import configure_bindings, external_changes, independent_update, revoke_roster
 from people_log_views import scope_for
 from support import OperationError, decode_json, run_operation, summary
@@ -173,7 +174,7 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
     created = sdk(publisher, "create-shared", name=name)
     check(created["sharingMode"] == "whole_database" and created["name"] == name, "circle_sdk_create",
           saw("create", mode=created.get("sharingMode"), name_match=created.get("name") == name))
-    database = created["id"]
+    database = hex32_id(created["id"], "circle_database")
     state["database"] = database
     report(f"Owned DEV mutation log {database} for {name} through the packaged SDK.")
     second = create_database(publisher, f"{name}-second")
@@ -187,6 +188,7 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
     scope = scope_for(publisher, api_key)
     publisher.keep_saved_credentials = True
     publisher.start()
+    ensure_relay(publisher, database)
     contact = root / "recipient.contact"
     reader = programs.command(recipient.home, ["share", "contact", "--out", str(contact)])["recipient_public_key"]
     sender = programs.command(publisher.home, ["share", "contact", "--out", str(root / "owner.contact")])["recipient_public_key"]

@@ -16,6 +16,9 @@ export class PeopleError extends Error {
 const invalid = (message) => new PeopleError('invalid_response', message);
 const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 const STATUSES = ['awaitingApproval', 'pending', 'needsReview', 'confirmed', 'declined'];
+/** Database and stream/device ids are Hex32 (64 lowercase hex), not UUID. */
+const HEX32 = /^[0-9a-f]{64}$/;
+const isHex32 = (value) => typeof value === 'string' && HEX32.test(value);
 
 /** Share contacts and databases through People. Use `connect` from `@lastdb/app-sdk` for content. */
 export function peopleClient({ dataDir, peoplePath = 'people', lastdbPath }) {
@@ -126,7 +129,7 @@ export function peopleClient({ dataDir, peoplePath = 'people', lastdbPath }) {
     async revokeAccess(database, nodeKey) {
       const result = await run(['grant', 'revoke'], ['--apply', '--', database, nodeKey]);
       if (!isObject(result) || typeof result.entryHash !== 'string' || result.state !== 'revoked'
-        || result.nodeKey !== nodeKey || typeof result.databaseId !== 'string') {
+        || result.nodeKey !== nodeKey || !isHex32(result.databaseId)) {
         throw invalid('People returned an invalid revoke receipt');
       }
       return result.entryHash;
@@ -136,14 +139,14 @@ export function peopleClient({ dataDir, peoplePath = 'people', lastdbPath }) {
 
 /** The database row People prints. It is LastDB's own row, returned as given. */
 function parseDatabase(value) {
-  if (isObject(value) && typeof value.id === 'string' && value.id.length > 0) return value;
+  if (isObject(value) && isHex32(value.id)) return value;
   throw invalid('People returned an invalid database');
 }
 
 function parseSharingStatus(value, expectedId) {
   if (isObject(value)) {
     const { requestId, databaseId, status, entryHash, writerSeq, error } = value;
-    if (requestId === expectedId && typeof databaseId === 'string' && STATUSES.includes(status)
+    if (requestId === expectedId && isHex32(databaseId) && STATUSES.includes(status)
       && (entryHash === undefined || typeof entryHash === 'string')
       && (writerSeq === undefined || typeof writerSeq === 'number')
       && (error === undefined || typeof error === 'string')
@@ -162,7 +165,7 @@ function parseSharingStatus(value, expectedId) {
 function parseInvitation(result) {
   if (isObject(result)) {
     const { databaseId, entryHash, writerSeq, publisher, invitation } = result;
-    if (typeof databaseId === 'string' && typeof entryHash === 'string'
+    if (isHex32(databaseId) && typeof entryHash === 'string'
       && typeof publisher === 'string' && typeof invitation === 'string' && invitation.length > 0
       && (writerSeq === undefined || typeof writerSeq === 'number')) {
       return {
@@ -177,13 +180,13 @@ function parseInvitation(result) {
 function parseSetup(result, request) {
   if (isObject(result)) {
     const { databaseId, name, setupName, version, definitions } = result;
-    if (typeof databaseId === 'string' && databaseId.length > 0
+    if (isHex32(databaseId)
       && (request.databaseId === undefined || databaseId === request.databaseId)
       && (name === null || typeof name === 'string')
       && setupName === request.setupName && version === (request.requiredVersion ?? 1)
       && isObject(definitions)) {
       const ids = Object.values(definitions);
-      if (ids.length > 0 && ids.every((id) => typeof id === 'string' && /^[0-9a-f]{64}$/.test(id))) {
+      if (ids.length > 0 && ids.every(isHex32)) {
         return { databaseId, name, setupName, version, definitions };
       }
     }

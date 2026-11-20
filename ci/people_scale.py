@@ -14,7 +14,7 @@ import uuid
 
 from people_app import SETUP, observe_access, sdk, people
 from people_share import album, wait_for_album, write_album
-from share_node import await_empty_grants, owner_grant, owner_revoke
+from share_node import await_empty_grants, ensure_relay, hex32_id, owner_grant, owner_revoke
 from support import require, retry, run_operation, summary
 
 
@@ -37,7 +37,7 @@ def timed_revoke(node, database, key):
 def scale(programs, root, publisher, recipient, api_key):
     name = f"ci-scale-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
     created = sdk(publisher, "create-shared", name=name)
-    database = str(uuid.UUID(created["id"]))
+    database = hex32_id(created["id"], "people_scale_database")
     require(created.get("sharingMode") == "whole_database", "people_scale_database")
     summary(f"Owned DEV database `{database}` for `{name}`.")
     print(f"People DEV scale database {database}", flush=True)
@@ -53,6 +53,7 @@ def scale(programs, root, publisher, recipient, api_key):
             "people_scale_dev_connection")
     publisher.keep_saved_credentials = True
     publisher.start()
+    ensure_relay(publisher, database)
     finished = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
     require(finished["databaseId"] == database and "memberWrites" not in finished
             and set(finished["definitions"]) == {

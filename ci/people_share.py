@@ -9,6 +9,7 @@ import uuid
 from people_app import (SETUP, expect_setup_offline, install, observe_access,
                         open_content_apps, pick, read_album, read_records, report_content_flow, sdk,
                         people, write_owned)
+from share_node import ensure_relay, hex32_id
 from support import require, retry, run_operation, summary
 
 
@@ -99,7 +100,7 @@ def transfer(programs, root, publisher, recipient, api_key):
     # The recipient has no cloud account. Create must still place the schemas and say the map is pending.
     expect_setup_offline(recipient, name + "-offline")
     created = sdk(publisher, "create-shared", name=name)
-    database = str(uuid.UUID(created["id"]))
+    database = hex32_id(created["id"], "people_share_database")
     require(database == created["id"] and created.get("sharingMode") == "whole_database"
             and created.get("spec") == SCOPE, "people_created_database")
     summary(f"Owned DEV mutation log `{database}` for `{name}`.")
@@ -118,6 +119,7 @@ def transfer(programs, root, publisher, recipient, api_key):
             and connected["credentials_saved"] is True, "people_dev_connection")
     publisher.keep_saved_credentials = True
     publisher.start()
+    ensure_relay(publisher, database)
     finish_shared_albums(publisher, database)
     verify_shared_albums_setup(publisher, name + "-albums")
     contact = root / "reader.contact"
@@ -150,7 +152,7 @@ def verify_shared_albums_setup(node, name):
     setup = {"setupName": "shared-albums", "requiredVersion": 1}
     created = people(node, "db", "create", name, "--setup", setup["setupName"])
     database = created["databaseId"]
-    require(str(uuid.UUID(database)) == database and created["name"] == name
+    require(hex32_id(database) == database and created["name"] == name
             and created["setupName"] == setup["setupName"] and created["version"] == 1
             and created["databaseId"] == database and "memberWrites" not in created,
             "people_named_setup_database")
@@ -248,11 +250,12 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
 
 def check_role_and_overview(programs, root, publisher, other_database, name, contact, reader_key):
     created = people(publisher, "db", "create", f"{name}-roles")
-    database = str(uuid.UUID(created["id"]))
+    database = hex32_id(created["id"], "people_share_database")
     require(created.get("sharingMode") == "whole_database" and created.get("spec") == SCOPE,
             "people_role_database")
     summary(f"Owned DEV role-check database `{database}`.")
     print(f"People DEV role-check database {database}", flush=True)
+    ensure_relay(publisher, database)
     finish_shared_albums(publisher, database)
     retry("people_role_grants", lambda: roster(publisher, database),
           lambda config: config.get("members") == [])

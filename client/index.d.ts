@@ -19,7 +19,7 @@ export class PeopleError extends Error {
  * the app by the schemas it declared, not by database.
  */
 export interface PeopleDatabase {
-  /** Stable database id for the `database` field of `POST /v1/read` and `POST /v1/write`. */
+  /** Hex32 database id (64 lowercase hex) for the `database` field of `POST /v1/read` and `POST /v1/write`. */
   id: string;
   name?: string | null;
   kind?: string | null;
@@ -31,6 +31,7 @@ export interface PeopleDatabase {
 
 /** A sealed invitation for the caller to hand to the verified recipient. */
 export interface PeopleInvitation {
+  /** Hex32 database id (64 lowercase hex). */
   databaseId: string;
   /** Tip of the publisher grant chain when the invitation was sealed. */
   entryHash: string;

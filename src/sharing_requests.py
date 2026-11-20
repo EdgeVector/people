@@ -35,6 +35,13 @@ def uuid_key(value):
     raise PeopleError("use a canonical UUID for the sharing request and its selections")
 
 
+def database_key(value):
+    """Whole-database ids are Hex32 (64 lowercase hex), not UUID."""
+    if isinstance(value, str) and DIGEST.fullmatch(value):
+        return value
+    raise PeopleError("use a 64-character lowercase hex database id")
+
+
 class SharingRequests:
     def __init__(self, node, reusable):
         self.node, self.reusable = node, reusable
@@ -198,7 +205,7 @@ class SharingRequests:
 
 def parse_change(change):
     operation = change["operation"]
-    database = uuid_key(change["databaseId"])
+    database = database_key(change["databaseId"])
     if operation in ("setCircleBinding", "removeCircleBinding"):
         target = {"circleId": uuid_key(change["circleId"])}
     elif operation in ("setPersonGrant", "revokePerson", "restorePerson"):

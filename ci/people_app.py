@@ -5,8 +5,8 @@ from contextlib import closing
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
-from uuid import UUID
 
 from node import Connection
 from support import CREDENTIALS_FILE, OperationError, decode_json, require, retry, summary
@@ -18,6 +18,7 @@ SPEC = {"name": "whole-database", "version": 1}
 GROUPS = ("person", "circle", "db", "grant", "request")
 APP = "people"
 RECEIPT = "lastdb-app-install.json"
+HEX32 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def lastdb_source():
@@ -192,11 +193,7 @@ def expect_setup_offline(node, name):
     created = people(node, "db", "create", name, "--setup", "shared-albums")
     database = created["databaseId"]
     definitions = created["definitions"]
-    try:
-        parsed = str(UUID(database))
-    except ValueError:
-        parsed = ""
-    require(parsed == database and created["name"] == name and created["setupName"] == "shared-albums"
+    require(HEX32.fullmatch(database) and created["name"] == name and created["setupName"] == "shared-albums"
             and created["version"] == 1 and "memberWrites" not in created
             and set(definitions) == {"social/Album", "social/AlbumItem", "social/Photo", "social/Comment"}
             and all(isinstance(item, str) and len(item) == 64 for item in definitions.values()),

@@ -13,8 +13,9 @@ from direct_publish import begin_ana_publish, note_ana_publish
 from direct_report import access_report, attach, label, row_report, watch, watch_rows
 from people_app import install, people, write_owned
 from share_node import (
-    READ_ONLY, SCHEMA, await_empty_grants, connect, declare, keyed, local_node, no_cloud_account,
-    node_key, note, owner_grant, proposal, report, submit_proposal, write_member,
+    READ_ONLY, SCHEMA, await_empty_grants, connect, declare, ensure_relay, hex32_id, keyed,
+    local_node, no_cloud_account, node_key, note, owner_grant, proposal, report, submit_proposal,
+    write_member,
 )
 from support import OperationError, run_operation, running
 
@@ -29,9 +30,13 @@ def yes(value):
 
 def create(publisher, name):
     created = people(publisher, "db", "create", name)
-    database = str(uuid.UUID(created["id"]))
-    if database != created["id"] or created.get("sharingMode") != "whole_database":
-        fail("direct_database", "id=%s mode=%s" % (yes(database == created["id"]), label(created.get("sharingMode"))))
+    database = created.get("id")
+    try:
+        database = hex32_id(database, "direct_database")
+    except OperationError:
+        fail("direct_database", "id=%s mode=%s" % (yes(False), label(created.get("sharingMode"))))
+    if created.get("sharingMode") != "whole_database":
+        fail("direct_database", "id=%s mode=%s" % (yes(True), label(created.get("sharingMode"))))
     report("Owned DEV mutation log %s for %s." % (database, name))
     return database
 
@@ -244,6 +249,7 @@ def operation(programs, root, publisher, recipient, api_key):
         write_owned(publisher, database, note("Seed", "seed"))
         connect(programs, publisher, api_key)
         await_empty_grants(publisher, database)
+        ensure_relay(publisher, database)
         member_b = local_node(programs, root, "bo")
         member_c = local_node(programs, root, "cam")
     except OperationError as error:

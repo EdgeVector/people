@@ -298,14 +298,31 @@ A pull request gets syntax, manifest and command-grammar checks
   of a poll ignore this rule and always start sharing.
 - Every day at 09:23 UTC (`23 9 * * *`).
 - A manual dispatch from `main`. Leave `lastdb_release` empty to use the
-  newest published nightly, or set it to a tag.
+  newest published nightly, or set it to a tag. Or set `lastdb_source_sha` to
+  a 40-hex LastDB commit that includes the People UDS grants (mutually
+  exclusive with `lastdb_release`); the job builds `lastdb`/`lastdbd` from
+  that public SHA. Set `relay_url` to the ExeMem DEV HTTP origin
+  (`https://….execute-api….amazonaws.com`, no `/relay` path, no credentials).
+  Empty `relay_url` uses `environments.dev.exemem_api` from the LastDB source
+  under test.
 
-Push runs and the daily run also use the newest published nightly.
+Push runs and the daily run also use the newest published nightly and the
+default DEV relay origin.
+
+Database and stream/device ids are 64-character lowercase hex (Hex32), not
+UUID. Sharing-request and circle ids remain UUIDs.
 
 To re-run a red nightly by hand:
 
 ```
 gh workflow run dev-sharing.yml -R EdgeVector/people --ref main -f mode=all -f lastdb_release=<tag>
+```
+
+To prove against a pinned LastDB SHA and the live DEV relay:
+
+```
+gh workflow run dev-sharing.yml -R EdgeVector/people --ref main \
+  -f mode=all -f lastdb_source_sha=<40-hex> -f relay_url=https://….execute-api….amazonaws.com
 ```
 
 A red run on `main` from a schedule or a push opens or updates one GitHub
@@ -324,10 +341,10 @@ the app socket, with `people` registered:
 | Mode | What it proves |
 | --- | --- |
 | `people-share` | Save a contact, set up `shared-albums`, grant, invite, accept, read, revoke and restore on a whole-database share, with two scoped content clients |
-| `people-circles` | Circles on a database whose setup set the member-write map, allowed and refused writes, app sharing requests, grants changed outside People, direct grant, revoke and restore |
+| `people-circles` | Circles grant submit from the chain role, Comment proposals, app sharing requests, grants changed outside People, direct grant, revoke and restore |
 | `people-prepare` | The manifest and schemas produce a valid unsigned registry declaration for this commit on a fresh node |
-| `people-link` | Open a read link with no member and no cloud account, start that reader from a snapshot, then refuse its writes and its sync after read returns to members |
-| `people-direct` | Two Submit members write directly, converge on one key, a reader is refused, and a proposal works again after write returns to proposals |
+| `people-link` | Deliver via `grant#any` read on the signed chain (no snapshots); revoke `any` stops later delivery |
+| `people-direct` | Org `write` members append directly, converge on one key, a reader is refused, and reducing to `submit` restores proposals |
 
 Where a recipe is the node owner, it keeps the owner socket. That is schema
 placement, roster reads and writes, share settings, a snapshot, an open

@@ -7,6 +7,7 @@ credential. Snapshots and unsigned share-config settings are gone.
 """
 
 import json
+import os
 import re
 import time
 import uuid
@@ -289,9 +290,44 @@ def node_key(programs, node, root, label):
     return key
 
 
+HEX32 = re.compile(r"[0-9a-f]{64}\Z")
+RELAY_ORIGIN = re.compile(
+    r"https://[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com\Z")
+
+
+def hex32_id(value, code="hex32_id"):
+    """Database and stream/device ids are 64 lowercase hex (not UUID)."""
+    require(isinstance(value, str) and HEX32.fullmatch(value), code)
+    return value
+
+
+def relay_url():
+    """ExeMem DEV relay origin. Paths are /relay/v1/... under this base. No credentials."""
+    url = os.environ.get("RELAY_URL", "").strip().rstrip("/")
+    require(bool(url) and RELAY_ORIGIN.fullmatch(url), "relay_url")
+    return url
+
+
+def author_relays(node, database, urls=None):
+    """Publisher-signed relays entry. Defaults to RELAY_URL from the workflow."""
+    urls = urls or [relay_url()]
+    reply = owner_databases(node, "relays", database=database, urls=urls)
+    require(reply.get("databaseId") == database, "author_relays")
+    listed = reply.get("urls")
+    if listed is not None:
+        require(isinstance(listed, list) and listed == urls, "author_relays_urls")
+    return reply
+
+
 def bootstrap_relay(node, database):
     """People/LastDB bootstrap of the first relay URL from the signed relays entry."""
     reply = owner_databases(node, "bootstrap_relay", database=database)
     require(reply.get("databaseId") == database and isinstance(reply.get("url"), str) and reply["url"],
             "bootstrap_relay")
     return reply
+
+
+def ensure_relay(node, database):
+    """Author the DEV relay URL into the chain, then bootstrap the local node."""
+    author_relays(node, database)
+    return bootstrap_relay(node, database)

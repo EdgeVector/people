@@ -305,7 +305,7 @@ A pull request gets syntax, manifest and command-grammar checks
   a 40-hex LastDB commit that includes the People UDS grants (mutually
   exclusive with `lastdb_release`); the job builds `lastdb`/`lastdbd` from
   that public SHA (default on dispatch: the #1811 head (local open-link)
-  `c43278414f501a082aa65ce9c60b25da0a0fb1f1`). Set `relay_url` to the ExeMem
+  `c694e28ab3209746f007f6bb3f8a4ca55a3f2516`). Set `relay_url` to the ExeMem
   DEV HTTP origin (`https://….execute-api….amazonaws.com`, no `/relay` path,
   no credentials). Empty `relay_url` uses `environments.dev.exemem_api` from
   the LastDB source under test.

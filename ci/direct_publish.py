@@ -95,17 +95,10 @@ def publish_json(publish):
 
 
 def access_note(access):
-    """stale, and mode. The list row names that mode write when mode is absent."""
-    if not isinstance(access, dict):
+    """#1805 selfAccess is `{role}` only."""
+    if not isinstance(access, dict) or "role" not in access:
         return ""
-    parts = []
-    if "stale" in access:
-        parts.append("stale=%s" % mark(access.get("stale")))
-    if "mode" in access:
-        parts.append("mode=%s" % mark(access.get("mode")))
-    elif "write" in access:
-        parts.append("mode=%s" % mark(access.get("write")))
-    return " ".join(parts)
+    return "role=%s" % mark(access.get("role"))
 
 
 def timeline_text():

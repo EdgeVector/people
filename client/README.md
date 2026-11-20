@@ -129,10 +129,10 @@ further changes to its database. Distinct databases can proceed with their own
 owner review.
 
 The row `acceptInvitation` returns, and `listDatabases` in the app SDK, expose
-the receiving node's `selfAccess` when available. An initial response can be
-unknown while access is confirmed. An active grant with `stale: false` can
-guide which write actions the app displays. The publisher still checks each
-proposal.
+the receiving node's `selfAccess` when available. After LastDB #1805 that object
+is `{ role: "read" | "submit" | "write" }` (no `state` / `stale`). A revoked
+key omits `selfAccess`. Use `role` to guide which write actions the app shows.
+The publisher still checks each proposal.
 
 ## Use a named database setup
 

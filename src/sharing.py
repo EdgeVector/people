@@ -137,7 +137,12 @@ class Sharing:
         return checked_ack(ack, database_id, role)
 
     def revoke(self, database_id, grantee):
-        """Append a publisher-signed revoke through LastDB. Cutoffs are node's job."""
+        """Append a publisher-signed revoke through LastDB. Cutoffs are node's job.
+
+        LastDB refuses `grantee=any` (`public read cannot be revoked`).
+        """
+        if grantee == "any":
+            raise PeopleError("public read cannot be revoked")
         ack = self.chain_call(lambda: self.node.databases(
             "revoke", database=database_id, grantee=grantee))
         return checked_ack(ack, database_id, "revoked")

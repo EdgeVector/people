@@ -144,7 +144,12 @@ def grant_public_read(node, database):
 
 
 def revoke_public_read(node, database):
-    return owner_revoke(node, database, "any")
+    """LastDB #1805 refuses revoke of `any` (`public read cannot be revoked`)."""
+    status, raw = exchange(node, "POST", "/v1/x/databases",
+                           {"action": "revoke", "database": database, "grantee": "any"})
+    if status == 400 and b"public read cannot be revoked" in raw:
+        return
+    pinned("revoke_any_refused", status, raw)
 
 
 def mint_link(node, database):
@@ -308,14 +313,20 @@ def relay_url():
     return url
 
 
-def author_relays(node, database, urls=None):
-    """Publisher-signed relays entry. Defaults to RELAY_URL from the workflow."""
-    urls = urls or [relay_url()]
-    reply = owner_databases(node, "relays", database=database, urls=urls)
-    require(reply.get("databaseId") == database, "author_relays")
-    listed = reply.get("urls")
-    if listed is not None:
-        require(isinstance(listed, list) and listed == urls, "author_relays_urls")
+def store_local_relay(node, url=None):
+    """Write RELAY_URL into log-sync/relay-url. lastdbd also reads LASTDB_RELAY_URL."""
+    url = url or relay_url()
+    path = node.home / "log-sync" / "relay-url"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(url + "\n", encoding="utf-8")
+    return url
+
+
+def read_relays(node, database):
+    """`relays` is read-only in #1805: `{databaseId, urls}` from the signed entry."""
+    reply = owner_databases(node, "relays", database=database)
+    require(reply.get("databaseId") == database and isinstance(reply.get("urls"), list),
+            "relays_read")
     return reply
 
 
@@ -328,6 +339,15 @@ def bootstrap_relay(node, database):
 
 
 def ensure_relay(node, database):
-    """Author the DEV relay URL into the chain, then bootstrap the local node."""
-    author_relays(node, database)
-    return bootstrap_relay(node, database)
+    """Point this node at RELAY_URL. #1805 has no UDS to author a relays entry.
+
+    Sync uses LASTDB_RELAY_URL / log-sync/relay-url. When a signed relays entry
+    is already held, also call bootstrap_relay so the local file matches it.
+    """
+    url = store_local_relay(node)
+    listed = read_relays(node, database)
+    if listed["urls"]:
+        boot = bootstrap_relay(node, database)
+        require(boot["url"].rstrip("/") == listed["urls"][0].rstrip("/"), "bootstrap_matches_relays")
+        return boot
+    return {"databaseId": database, "url": url}

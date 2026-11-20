@@ -20,9 +20,10 @@ def public_person(person):
 
 
 def can_submit_received(row):
+    """#1805 selfAccess is `{role}` only; submit/write may propose or write."""
     access = row.get("selfAccess") or {}
-    return (row.get("sharingMode") == "whole_database" and access.get("state") == "active"
-            and access.get("stale") is False)
+    return (row.get("sharingMode") == "whole_database"
+            and access.get("role") in ("submit", "write"))
 
 
 class PeopleApp:

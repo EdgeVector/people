@@ -84,10 +84,9 @@ def enroll(programs, publisher, members, root):
 
 def wait_role(node, database, role, write, stage, name):
     def done(shown):
-        access = shown["database"]["selfAccess"]
-        # Signed model: role is the chain grant. Legacy write=direct maps to role=write.
-        return (access.get("state") == "active" and access.get("stale") is False and access.get("confirmedAtMs")
-                and access.get("role") == role)
+        access = (shown.get("database") or {}).get("selfAccess") or {}
+        # #1805 selfAccess is `{role}` only.
+        return access.get("role") == role
 
     del write
     watch(stage, lambda: people(node, "db", "show", database), done,

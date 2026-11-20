@@ -330,12 +330,15 @@ def read_album(node, selections, database, key, title=None):
 
 
 def observe_access(node, database, state, tip=None, *, role="read"):
-    """Wait until selfAccess reflects the folded chain grant role."""
+    """Wait until selfAccess matches #1805: `{role}` present, or omitted when revoked."""
+    del tip
+
     def matches(result):
-        access = result["database"]["selfAccess"]
-        return (access["state"] == state and access.get("confirmedAtMs") and not access.get("stale")
-                and (tip is None or access.get("entryHash") == tip)
-                and (state != "active" or access["role"] == role))
+        access = (result.get("database") or {}).get("selfAccess")
+        if state == "revoked":
+            return access is None or access.get("role") in (None, "revoked")
+        return isinstance(access, dict) and access.get("role") == role
+
     retry(f"people_recipient_access_{state}", lambda: people(node, "db", "show", database), matches)
 
 

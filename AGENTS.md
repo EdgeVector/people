@@ -10,8 +10,10 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
   calls use `POST /v1/read` and `POST /v1/write`.
 - `ci/` holds the DEV sharing recipes run by `dev-sharing.yml`. Database and
   stream/device ids are Hex32 (64 lowercase hex), not UUID. DEV sharing takes
-  a `RELAY_URL` (ExeMem DEV origin for `/relay/v1`) and a LastDB nightly or a
-  pinned main SHA that includes the People UDS grants.
+  a `RELAY_URL` (ExeMem DEV origin for `/relay/v1`) and defaults
+  `lastdb_source_sha` to the #1805 merge on LastDB main until a post-#1805
+  nightly is selected. `selfAccess` is `{role}` only. `relays` is read-only;
+  nodes also get `LASTDB_RELAY_URL`. Public `any` cannot be revoked.
 - `lastdb-app.json` is the app manifest and the source of People's private
   schema definitions. Each schema object uses a local name such as `Person`.
   The installer stores that name as `people/<Name>` from the manifest

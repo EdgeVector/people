@@ -90,11 +90,13 @@ class Circles:
         desired_roles = desired_member_roles(desired, direct, definitions, restore, members)
         if direct_change and direct_change["operation"] == "revokePerson":
             desired_roles.pop(direct_key, None)
-        if len(desired_roles) + sum(1 for row in members if row["state"] == "revoked"
-                                    and row["nodeKey"] not in desired_roles) > 98:
+        # Only People-managed people are revoked by circle or direct edits.
+        # Chain grants made outside People stay until an explicit revoke asks.
+        managed = set(before)
+        ops = grant_ops(members, desired_roles, managed)
+        replacement = projected_members(members, desired_roles, managed)
+        if len(replacement) > 98:
             raise PeopleError("This database allows 98 roster entries, including revoked people.")
-        ops = grant_ops(members, desired_roles)
-        replacement = projected_members(members, desired_roles)
         next_policy = {"circles": circles, "direct": direct,
                        "confirmed": {row["nodeKey"]: grant_value(row)
                                      for row in replacement if row["nodeKey"] in desired_roles}}
@@ -240,7 +242,7 @@ def role_from_scopes(circle, direct, definitions):
     return role_for_scope(combine_scope(circle, direct, definitions))
 
 
-def grant_ops(members, desired_roles):
+def grant_ops(members, desired_roles, managed):
     current = {row["nodeKey"]: row for row in members}
     ops = []
     for key, role in sorted(desired_roles.items()):
@@ -249,19 +251,19 @@ def grant_ops(members, desired_roles):
             continue
         ops.append({"op": "grant", "nodeKey": key, "role": role})
     for key, row in sorted(current.items()):
-        if key in desired_roles or row["state"] == "revoked":
+        if key in desired_roles or row["state"] == "revoked" or key not in managed:
             continue
         ops.append({"op": "revoke", "nodeKey": key})
     return ops
 
 
-def projected_members(members, desired_roles):
+def projected_members(members, desired_roles, managed):
     rows = {row["nodeKey"]: member_row(row["nodeKey"], row["role"] if row["state"] != "revoked" else "revoked")
             for row in members}
     for key, role in desired_roles.items():
         rows[key] = member_row(key, role)
     for key, row in list(rows.items()):
-        if key not in desired_roles and row["state"] == "active":
+        if key not in desired_roles and key in managed and row["state"] == "active":
             rows[key] = member_row(key, "revoked")
     return [rows[key] for key in sorted(rows)]
 

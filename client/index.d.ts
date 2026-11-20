@@ -33,10 +33,8 @@ export interface PeopleDatabase {
 export interface PeopleInvitation {
   databaseId: string;
   /** Tip of the publisher grant chain when the invitation was sealed. */
-  entryHash?: string;
+  entryHash: string;
   writerSeq?: number;
-  /** @deprecated Prefer entryHash from the signed grant chain. */
-  revision?: string;
   publisher: string;
   invitation: string;
 }
@@ -86,8 +84,6 @@ export interface PeopleSharingStatus {
   status: 'awaitingApproval' | 'pending' | 'confirmed' | 'needsReview' | 'declined';
   entryHash?: string;
   writerSeq?: number;
-  /** @deprecated Prefer entryHash from the signed grant chain. */
-  revision?: string;
   error?: string;
 }
 

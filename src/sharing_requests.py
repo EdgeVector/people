@@ -237,6 +237,6 @@ def status(declaration, receipt=None):
               "databaseId": change["databaseId"], "change": change, "status": "awaitingApproval"}
     if receipt:
         result.update({key: receipt[key]
-                       for key in ("status", "entryHash", "writerSeq", "revision", "error")
+                       for key in ("status", "entryHash", "writerSeq", "error")
                        if key in receipt})
     return result

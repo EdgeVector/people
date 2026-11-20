@@ -278,7 +278,8 @@ def edit_circle(owner, *arguments):
 
 
 def revisions(response):
-    return {row["databaseId"]: row.get("entryHash") or row.get("revision") for row in response["databases"]}
+    return {row["databaseId"]: row.get("entryHash") for row in response["databases"]
+            if isinstance(row.get("entryHash"), str)}
 
 
 def wait_cloud(stage, node, database):

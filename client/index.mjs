@@ -142,18 +142,16 @@ function parseDatabase(value) {
 
 function parseSharingStatus(value, expectedId) {
   if (isObject(value)) {
-    const { requestId, databaseId, status, entryHash, writerSeq, revision, error } = value;
-    const tip = entryHash !== undefined ? entryHash : revision;
+    const { requestId, databaseId, status, entryHash, writerSeq, error } = value;
     if (requestId === expectedId && typeof databaseId === 'string' && STATUSES.includes(status)
-      && (tip === undefined || typeof tip === 'string')
+      && (entryHash === undefined || typeof entryHash === 'string')
       && (writerSeq === undefined || typeof writerSeq === 'number')
       && (error === undefined || typeof error === 'string')
-      && (status !== 'confirmed' || typeof tip === 'string')) {
+      && (status !== 'confirmed' || typeof entryHash === 'string')) {
       return {
         requestId, databaseId, status,
         ...(entryHash === undefined ? {} : { entryHash }),
         ...(writerSeq === undefined ? {} : { writerSeq }),
-        ...(revision === undefined ? {} : { revision }),
         ...(error === undefined ? {} : { error }),
       };
     }
@@ -163,15 +161,13 @@ function parseSharingStatus(value, expectedId) {
 
 function parseInvitation(result) {
   if (isObject(result)) {
-    const { databaseId, entryHash, writerSeq, revision, publisher, invitation } = result;
-    const tipOk = typeof entryHash === 'string' || typeof revision === 'string';
-    if (typeof databaseId === 'string' && tipOk
-      && typeof publisher === 'string' && typeof invitation === 'string' && invitation.length > 0) {
+    const { databaseId, entryHash, writerSeq, publisher, invitation } = result;
+    if (typeof databaseId === 'string' && typeof entryHash === 'string'
+      && typeof publisher === 'string' && typeof invitation === 'string' && invitation.length > 0
+      && (writerSeq === undefined || typeof writerSeq === 'number')) {
       return {
-        databaseId, publisher, invitation,
-        ...(entryHash === undefined ? {} : { entryHash }),
+        databaseId, entryHash, publisher, invitation,
         ...(writerSeq === undefined ? {} : { writerSeq }),
-        ...(revision === undefined ? {} : { revision }),
       };
     }
   }

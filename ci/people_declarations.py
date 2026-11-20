@@ -31,9 +31,8 @@ def configure_bindings(publisher, circle, first, second, scopes):
         approve(publisher, request_id, preview)
     for request_id in requests:
         status = sdk(publisher, "sharing-status", requestId=request_id)
-        require(status["status"] == "confirmed" and (
-            isinstance(status.get("entryHash"), str) or isinstance(status.get("revision"), str)),
-            "app_request_confirmed_empty_circle")
+        require(status["status"] == "confirmed" and isinstance(status.get("entryHash"), str),
+                "app_request_confirmed_empty_circle")
     require(not people(publisher, "request", "list")["requests"], "app_confirmed_requests_leave_list")
     links = next(row["links"] for row in people(publisher, "circle", "list") if row["id"] == circle["id"])
     require(links == {first: sorted(scopes), second: []}, "app_declarations_saved")

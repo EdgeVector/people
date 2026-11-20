@@ -234,6 +234,13 @@ class Sharing:
                 raise
 
     def apply(self, database_id, update):
+        expected = update.get("expectedEntryHash")
+        tip = self.configuration(database_id).get("entryHash")
+        if expected != tip:
+            raise LastDBError(
+                "POST", "/v1/x/databases", 409,
+                {"error": {"code": "grant_chain_moved",
+                           "message": "grant chain moved since this update was planned"}})
         receipt = None
         for op in update["ops"]:
             if op["op"] == "grant":
@@ -257,7 +264,7 @@ class Sharing:
             "invite", database=database_id, contactCode=contact_code, expectedNodeKey=node_key))
         if response["databaseId"] != database_id or not response.get("invitation"):
             raise PeopleError("LastDB returned a mismatched invitation")
-        return {"databaseId": database_id, "entryHash": tip.get("entryHash"),
+        return {"databaseId": database_id, "entryHash": tip["entryHash"],
                 "writerSeq": tip.get("writerSeq"), "publisher": publisher,
                 "invitation": response["invitation"]}
 

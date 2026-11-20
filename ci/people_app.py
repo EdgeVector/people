@@ -349,7 +349,7 @@ def observe_access(node, database, state, tip=None, *, role="read", write_schema
     def matches(result):
         access = result["database"]["selfAccess"]
         return (access["state"] == state and access.get("confirmedAtMs") and not access.get("stale")
-                and (tip is None or access.get("entryHash") == tip or access.get("revision") == str(tip))
+                and (tip is None or access.get("entryHash") == tip)
                 and (state != "active" or access["role"] == role)
                 and (write_schemas is None or access.get("writeSchemas") == write_schemas)
                 and (member_writes is None or access.get("memberWrites") == member_writes))

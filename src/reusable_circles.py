@@ -124,7 +124,7 @@ class ReusableCircles:
             operation = operations.get(database)
             if operation and operation["status"] != "confirmed":
                 receipt = {key: outcome[key]
-                           for key in ("databaseId", "status", "entryHash", "writerSeq", "revision", "error")
+                           for key in ("databaseId", "status", "entryHash", "writerSeq", "error")
                            if key in outcome}
                 operations[database] = {"requestId": operation["requestId"], **receipt}
                 if outcome["status"] != "confirmed" and "direct" in operation:

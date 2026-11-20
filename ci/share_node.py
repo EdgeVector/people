@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 from node import Connection, OwnedNode
 from people_app import owned_item, record_key
-from support import CREDENTIALS_FILE, OperationError, decode_json, require, summary
+from support import CREDENTIALS_FILE, OperationError, decode_json, require, summary, timeout_detail
 
 
 SCHEMA = "dev-notes/Note"
@@ -84,21 +84,25 @@ def decoded(status, raw, code, *, ok=True):
 
 
 def until(stage, read, done):
-    """Retry for 150 seconds and keep the last socket refusal."""
+    """Retry for 150 seconds and keep the last refusal plus last sample."""
     deadline = time.monotonic() + 150
     last = None
+    last_value = None
     while time.monotonic() < deadline:
         try:
             value = read()
         except OperationError as error:
             last = error
         else:
+            last_value = value
             if done(value):
                 return value
         time.sleep(2)
+    detail = timeout_detail(last, last_value)
     if last is not None:
-        raise OperationError(stage, socket_refusal=last.socket_refusal, cli_refusal=last.cli_refusal)
-    raise OperationError(stage)
+        raise OperationError(stage, socket_refusal=last.socket_refusal, cli_refusal=last.cli_refusal,
+                             command_output=detail or last.command_output)
+    raise OperationError(stage, command_output=detail)
 
 
 def owner_databases(node, action, **fields):

@@ -114,9 +114,9 @@ def failure(error):
     return value
 
 
-def require(condition, code):
+def require(condition, code, detail=None):
     if not condition:
-        raise OperationError(code)
+        raise OperationError(code, command_output=(detail, "") if detail else None)
 
 
 def pairs(items):
@@ -196,20 +196,49 @@ def running(node, *, remove_saved=False):
 def retry(stage, command, complete):
     deadline = time.monotonic() + 150
     last_error = None
+    last_value = None
     while time.monotonic() < deadline:
         try:
             result = command()
         except OperationError as error:
             last_error = error
         else:
+            last_value = result
             if complete(result):
                 return result
         time.sleep(2)
+    detail = timeout_detail(last_error, last_value)
     raise OperationError(
         stage,
         cli_refusal=last_error.cli_refusal if last_error else None,
-        command_output=last_error.command_output if last_error else None,
+        socket_refusal=last_error.socket_refusal if last_error else None,
+        command_output=detail if detail else (
+            last_error.command_output if last_error else None),
     )
+
+
+def timeout_detail(last_error, last_value):
+    """Status + body for a timed-out wait. Secrets are redacted."""
+    parts = []
+    if last_error is not None:
+        if last_error.socket_refusal:
+            refusal = last_error.socket_refusal
+            parts.append("socket=%s:%s" % (refusal.get("status"), refusal.get("error_head")
+                                           or refusal.get("reason")))
+        if last_error.cli_refusal:
+            parts.append("cli=%s" % redact_command_text(str(last_error.cli_refusal), 200))
+        if last_error.command_output:
+            stderr, stdout = last_error.command_output
+            raw = stderr if stderr else stdout
+            if raw:
+                parts.append(redact_command_text(str(raw), 400))
+    if last_value is not None:
+        try:
+            text = json.dumps(last_value, separators=(",", ":"), default=str)
+        except (TypeError, ValueError):
+            text = str(last_value)
+        parts.append("last=%s" % redact_command_text(text, 400))
+    return ("\n".join(parts), "") if parts else None
 
 
 def summary(message):

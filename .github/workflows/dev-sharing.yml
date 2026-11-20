@@ -200,12 +200,16 @@ jobs:
           CACHE_HIT: ${{ steps.attempted.outputs.cache-hit }}
           TAG: ${{ steps.select.outputs.tag }}
           BUILD_MODE: ${{ steps.select.outputs.build_mode }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           # A miss leaves cache-hit empty. Only an exact hit skips.
           if [ "$POLL" = "true" ] && [ "$CACHE_HIT" = "true" ]; then
             printf 'run_sharing=false\n' >> "$GITHUB_OUTPUT"
             printf -- '- Sharing: skipped, `%s` was already attempted\n' "$TAG" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$EVENT_NAME" = "schedule" ] && [ "$BUILD_MODE" = "source" ]; then
+            printf 'run_sharing=false\n' >> "$GITHUB_OUTPUT"
+            echo "- Sharing: skipped, fixed source pin on schedule" >> "$GITHUB_STEP_SUMMARY"
           else
             printf 'run_sharing=true\n' >> "$GITHUB_OUTPUT"
             echo "- Sharing: run ($BUILD_MODE)" >> "$GITHUB_STEP_SUMMARY"

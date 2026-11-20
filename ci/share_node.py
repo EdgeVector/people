@@ -1,12 +1,13 @@
 """Owner-socket steps the People command does not provide.
 
-People can save a contact, grant a person, seal an invitation, and accept that
-invitation. It cannot set read or write, publish a snapshot, mint or accept an
-open link, or submit a mutation proposal. These helpers do those steps on the
-owner socket. They never print a link, a key, or a credential.
+People grants, revokes, seals invitations, and accepts them on the signed
+chain. These helpers still cover open-link mint/accept, proposal submit, and
+direct writes on the owner socket. They never print a link, a key, or a
+credential. Snapshots and unsigned share-config settings are gone.
 """
 
 import json
+import os
 import re
 import time
 import uuid
@@ -100,131 +101,55 @@ def until(stage, read, done):
     raise OperationError(stage)
 
 
-def as_int(value):
-    if type(value) is int and value >= 0:
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
+def owner_databases(node, action, **fields):
+    """One owner-socket POST /v1/x/databases action (signed-history grant surface)."""
+    body = {"action": action, **{key: value for key, value in fields.items() if value is not None}}
+    status, raw = exchange(node, "POST", "/v1/x/databases", body)
+    if status not in (200, 202):
+        pinned(f"databases_{action}", status, raw)
+    return decoded(status, raw, f"databases_{action}", ok=False)
 
 
-def member_wire(member):
-    wire = {"nodeKey": member["nodeKey"], "role": member["role"], "state": member["state"]}
-    if member.get("regrant"):
-        wire["regrant"] = True
-    if "writeSchemas" in member:
-        wire["writeSchemas"] = member["writeSchemas"]
-    return wire
+def chain_grants(node, database):
+    reply = owner_databases(node, "grants", database=database)
+    require(reply.get("databaseId") == database, "chain_grants_database")
+    return reply
 
 
-def read_config(node, database):
-    status, raw = exchange(node, "GET", f"/api/databases/{database}/share/config")
-    if status != 200:
-        pinned("share_config_read", status, raw)
-    value = decoded(status, raw, "share_config_read")
-    require(value.get("databaseId") == database, "share_config_database")
-    return value
+def await_empty_grants(node, database):
+    """Wait until the folded chain has no members (fresh birth)."""
+    return until("chain_grants_ready", lambda: chain_grants(node, database),
+                 lambda row: (row.get("members") or []) == [] and row.get("any") in (None,))
 
 
-def await_defaults(node, database):
-    def read():
-        status, raw = exchange(node, "GET", f"/api/databases/{database}/share/config")
-        if status != 200:
-            pinned("share_config_pending", status, raw)
-        return decoded(status, raw, "share_config_read")
-
-    current = until("share_cloud_ready", read,
-                    lambda row: str(row.get("revision")) == "0" and row.get("members") == [])
-    require(current.get("read") == "members" and current.get("write") == "proposals"
-            and current.get("memberWrites") == {}, "share_default_settings")
-    return current
+def owner_grant(node, database, grantee, role):
+    """Append a publisher-signed grant on the owner socket (outside People)."""
+    ack = owner_databases(node, "grant", database=database, grantee=grantee, role=role)
+    require(ack.get("databaseId") == database and ack.get("role") == role
+            and isinstance(ack.get("entryHash"), str) and type(ack.get("writerSeq")) is int,
+            "owner_grant_ack")
+    return ack
 
 
-def put_settings(node, database, **settings):
-    """Change read, write, or memberWrites and leave the member revision in place."""
-    deadline = time.monotonic() + 150
-    while time.monotonic() < deadline:
-        try:
-            current = read_config(node, database)
-        except OperationError as error:
-            if error.socket_refusal and error.socket_refusal.get("status") != 503:
-                raise
-            time.sleep(2)
-            continue
-        body = {"expectedRevision": current["revision"], "requestId": str(uuid.uuid4()),
-                "members": [member_wire(item) for item in current["members"]], **settings}
-        status, raw = exchange(node, "PUT", f"/api/databases/{database}/share/config", body)
-        if status == 503:
-            time.sleep(2)
-            continue
-        if status != 200:
-            pinned("share_settings_rejected", status, raw)
-        ack = decoded(status, raw, "share_settings_ack")
-        require(ack.get("committed") is True and ack.get("requestId") == body["requestId"]
-                and ack.get("databaseId") == database and ack.get("revision") == current["revision"],
-                "share_settings_ack")
-        stored = read_config(node, database)
-        require(all(stored.get(key) == value for key, value in settings.items()), "share_settings_stored")
-        require(stored.get("revision") == current["revision"]
-                and stored.get("members") == current["members"], "share_settings_members")
-        return stored
-    raise OperationError("share_settings")
+def owner_revoke(node, database, grantee):
+    ack = owner_databases(node, "revoke", database=database, grantee=grantee)
+    require(ack.get("databaseId") == database and ack.get("role") == "revoked"
+            and isinstance(ack.get("entryHash"), str), "owner_revoke_ack")
+    return ack
 
 
-def snapshot_note(node, database):
-    path = Path(node.home) / "log-sync" / database / "snapshot-error"
-    if not path.is_file():
-        return "ready false"
-    try:
-        return error_head(path.read_bytes()[:256])
-    except OSError:
-        return "snapshot error unreadable"
+def grant_public_read(node, database):
+    """Deliver mode: grant#any read on the signed chain."""
+    return owner_grant(node, database, "any", "read")
 
 
-def watch_snapshot(node, database, nonce, seconds):
-    path = "/api/backup/snapshot?database=%s&nonce=%s" % (quote(database, safe=""), quote(nonce, safe=""))
-    deadline = time.monotonic() + max(0, seconds)
-    while time.monotonic() < deadline:
-        status, raw = exchange(node, "GET", path)
-        if status != 200:
-            time.sleep(1)
-            continue
-        value = decoded(status, raw, "snapshot_status")
-        if value.get("ready") is True:
-            through = as_int(value.get("snapshot_through"))
-            require(through is not None and as_int(value.get("log_head")) == through, "snapshot_head")
-            return through
-        if value.get("error"):
-            pinned("snapshot_failed", status, raw)
-        time.sleep(1)
-    return None
-
-
-def publish_snapshot(node, database):
-    """Ask the node to publish a snapshot, then wait until that request is ready.
-
-    `lastdb backup snapshot --wait` prints text, so the owner socket is used.
-    A snapshot is not only a timer. The node returns ready false, and hides the
-    two wait sentences, until the local cursor matches the cloud head.
-    """
-    deadline = time.monotonic() + 150
-    while time.monotonic() < deadline:
-        status, raw = exchange(node, "POST", "/api/backup/snapshot", {"database": database})
-        if status == 503:
-            time.sleep(2)
-            continue
-        if status != 200:
-            pinned("snapshot_queue_rejected", status, raw)
-        queued = decoded(status, raw, "snapshot_queue")
-        nonce = queued.get("nonce")
-        require(queued.get("database_id") == database and isinstance(nonce, str) and nonce, "snapshot_queue")
-        found = watch_snapshot(node, database, nonce, min(70, deadline - time.monotonic()))
-        if found is not None:
-            require(found > 0, "snapshot_through")
-            return found
-    raise OperationError("snapshot_ready", socket_refusal={
-        "status": 200, "reason": "snapshot_ready", "error_head": snapshot_note(node, database),
-    })
+def revoke_public_read(node, database):
+    """LastDB #1805 refuses revoke of `any` (`public read cannot be revoked`)."""
+    status, raw = exchange(node, "POST", "/v1/x/databases",
+                           {"action": "revoke", "database": database, "grantee": "any"})
+    if status == 400 and b"public read cannot be revoked" in raw:
+        return
+    pinned("revoke_any_refused", status, raw)
 
 
 def mint_link(node, database):
@@ -307,6 +232,14 @@ def write_member(node, database, update):
     pinned("member_write_rejected", status, raw)
 
 
+def refuse_append(node, database, update, code):
+    """A revoked or non-grantee member's next append must be rejected."""
+    status, raw = exchange(node, "POST", "/v1/write", {"mutations": [owned_item(database, update)]})
+    if status in (401, 403):
+        return
+    pinned(code, status, raw)
+
+
 def submit_proposal(node, database, update):
     mutation_id = str(uuid.uuid4())
     status, raw = exchange(node, "POST", f"/api/databases/{database}/submissions", update,
@@ -362,34 +295,59 @@ def node_key(programs, node, root, label):
     return key
 
 
-def snapshot_view(home, database):
-    root = Path(home) / "received-shares-v1" / database
-    through_path = root / "log" / "lastdb-snapshot-through"
-    through = as_int(decode_json(through_path.read_bytes()).get("through")) if through_path.is_file() else None
-    prefix_path = Path(home) / "log-sync" / database / "prefix.json"
-    prefix = decode_json(prefix_path.read_bytes()) if prefix_path.is_file() else {}
-    session_path = Path(home) / "log-sync" / database / "session.json"
-    session = decode_json(session_path.read_bytes()) if session_path.is_file() else {}
-    require(isinstance(prefix, dict) and isinstance(session, dict), "link_snapshot_files")
-    return {"adopted": (root / "snapshot-adopted").is_file(), "absent": (root / "snapshot-absent").is_file(),
-            "through": through, "prefix": as_int(prefix.get("through")),
-            "prefix_database": prefix.get("database_id"), "cursor": as_int(session.get("cursor"))}
+HEX32 = re.compile(r"[0-9a-f]{64}\Z")
+RELAY_ORIGIN = re.compile(
+    r"https://[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com\Z")
 
 
-def snapshot_story(home, database, requested):
-    """Say whether the reader installed the requested snapshot and then replayed."""
-    seen = snapshot_view(home, database)
-    require(seen["adopted"] and not seen["absent"] and seen["through"] is not None, "link_reader_skipped_snapshot")
-    require(seen["prefix_database"] == database and seen["prefix"] is not None, "link_prefix")
-    through, prefix, cursor = seen["through"], seen["prefix"], seen["cursor"]
-    require(prefix >= through, "link_prefix_through")
-    advanced = prefix > through or (cursor is not None and cursor > through)
-    if through == requested and advanced:
-        return "started at snapshot %s and replayed to prefix %s" % (through, prefix)
-    if through > requested:
-        return ("installed snapshot %s already covers requested snapshot %s, so the later "
-                "records are not distinguished from that later snapshot") % (through, requested)
-    raise OperationError("link_snapshot_observation", socket_refusal={
-        "status": 200, "reason": "link_snapshot_observation",
-        "error_head": "through %s prefix %s cursor %s requested %s" % (through, prefix, cursor, requested),
-    })
+def hex32_id(value, code="hex32_id"):
+    """Database and stream/device ids are 64 lowercase hex (not UUID)."""
+    require(isinstance(value, str) and HEX32.fullmatch(value), code)
+    return value
+
+
+def relay_url():
+    """ExeMem DEV relay origin. Paths are /relay/v1/... under this base. No credentials."""
+    url = os.environ.get("RELAY_URL", "").strip().rstrip("/")
+    require(bool(url) and RELAY_ORIGIN.fullmatch(url), "relay_url")
+    return url
+
+
+def store_local_relay(node, url=None):
+    """Write RELAY_URL into log-sync/relay-url. lastdbd also reads LASTDB_RELAY_URL."""
+    url = url or relay_url()
+    path = node.home / "log-sync" / "relay-url"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(url + "\n", encoding="utf-8")
+    return url
+
+
+def read_relays(node, database):
+    """`relays` is read-only in #1805: `{databaseId, urls}` from the signed entry."""
+    reply = owner_databases(node, "relays", database=database)
+    require(reply.get("databaseId") == database and isinstance(reply.get("urls"), list),
+            "relays_read")
+    return reply
+
+
+def bootstrap_relay(node, database):
+    """People/LastDB bootstrap of the first relay URL from the signed relays entry."""
+    reply = owner_databases(node, "bootstrap_relay", database=database)
+    require(reply.get("databaseId") == database and isinstance(reply.get("url"), str) and reply["url"],
+            "bootstrap_relay")
+    return reply
+
+
+def ensure_relay(node, database):
+    """Point this node at RELAY_URL. #1805 has no UDS to author a relays entry.
+
+    Sync uses LASTDB_RELAY_URL / log-sync/relay-url. When a signed relays entry
+    is already held, also call bootstrap_relay so the local file matches it.
+    """
+    url = store_local_relay(node)
+    listed = read_relays(node, database)
+    if listed["urls"]:
+        boot = bootstrap_relay(node, database)
+        require(boot["url"].rstrip("/") == listed["urls"][0].rstrip("/"), "bootstrap_matches_relays")
+        return boot
+    return {"databaseId": database, "url": url}

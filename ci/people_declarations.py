@@ -1,15 +1,14 @@
 """Publish app-declared sharing through the owner's People commands in the signed DEV operation."""
 
-from contextlib import closing
 import json
 import uuid
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from node import Connection
 from people_app import sdk, people
-from support import decode_json, require, summary
+from share_node import chain_grants, owner_grant, owner_revoke
+from support import require, summary
 
 
 def configure_bindings(publisher, circle, first, second, scopes):
@@ -24,15 +23,15 @@ def configure_bindings(publisher, circle, first, second, scopes):
         declaration = propose(publisher, app, {"operation": "setCircleBinding", "databaseId": database,
                                               "circleId": circle["id"], **grant})
         current = roster(publisher, database)
-        require(current["revision"] == "0" and not current["members"], "app_request_needs_owner_approval")
+        require(not current["members"], "app_request_needs_owner_approval")
         request_id = declaration["requestId"]
         requests.append(request_id)
-        # Each command is a new owner process, so this reads the saved proposal.
         preview = preview_request(publisher, request_id)
         require(preview["status"] == "awaitingApproval", "app_request_visible_on_reopen")
         approve(publisher, request_id, preview)
     for request_id in requests:
-        require(sdk(publisher, "sharing-status", requestId=request_id)["revision"] == "0",
+        status = sdk(publisher, "sharing-status", requestId=request_id)
+        require(status["status"] == "confirmed" and isinstance(status.get("entryHash"), str),
                 "app_request_confirmed_empty_circle")
     require(not people(publisher, "request", "list")["requests"], "app_confirmed_requests_leave_list")
     links = next(row["links"] for row in people(publisher, "circle", "list") if row["id"] == circle["id"])
@@ -64,7 +63,7 @@ def decline_binding(publisher, circle, database):
             and roster(publisher, database) == before, "app_decline_returned_through_sdk")
     summary("The owner found a proposal with `people request list` and declined it. It left the list, and its "
             "terminal status survived a repeated decline, a repeated request, and an old approval preview "
-            "without changing the roster.")
+            "without changing the grants.")
 
 
 def propose(publisher, app, change):
@@ -92,37 +91,29 @@ def approve(owner, request_id, preview, review=None, refusal=None):
 
 
 def roster(node, database):
-    return node.call(f"/api/databases/{database}/share/config")
-
-
-def put_members(node, database, revision, members):
-    update = {"expectedRevision": revision, "requestId": str(uuid.uuid4()), "members": members}
-    with closing(Connection(node.socket)) as connection:
-        connection.request("PUT", f"/api/databases/{database}/share/config",
-                           json.dumps(update), {"Content-Type": "application/json"})
-        with connection.getresponse() as response:
-            require(response.status == 200, "publisher_roster_update")
-            value = decode_json(response.read(128 * 1024))
-    require(value["committed"] and value["requestId"] == update["requestId"], "publisher_roster_confirmed")
-    return value
+    reply = chain_grants(node, database)
+    members = []
+    for row in reply.get("members") or []:
+        members.append({"nodeKey": row["nodeKey"], "role": row["role"],
+                        "state": "revoked" if row["role"] == "revoked" else "active"})
+    return {"databaseId": database, "members": members,
+            "entryHash": reply.get("entryHash"), "writerSeq": reply.get("writerSeq")}
 
 
 def external_changes(publisher, circle, database, reader):
     person = Ed25519PrivateKey.generate().public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
-    current = roster(publisher, database)
-    separate = {"nodeKey": person, "state": "active", "role": "read"}
-    put_members(publisher, database, current["revision"], [*current["members"], separate])
+    owner_grant(publisher, database, person, "read")
     change = {"operation": "setCircleBinding", "databaseId": database,
               "circleId": circle["id"], "preset": "commenter"}
     request_id = propose(publisher, "photo-journal", change)["requestId"]
     result = approve(publisher, request_id, preview_request(publisher, request_id))
-    require(result["status"] == "confirmed" and int(result["revision"]) > int(current["revision"]) + 1,
-            "unrelated_owner_grant_keeps_people_applicable")
+    require(result["status"] == "confirmed", "unrelated_owner_grant_keeps_people_applicable")
     current = roster(publisher, database)
-    require(separate in current["members"], "external_grant_preserved")
+    require(any(row["nodeKey"] == person and row["state"] == "active" for row in current["members"]),
+            "external_grant_preserved")
     outside = {"nodeKey": reader, "state": "active", "role": "read"}
-    put_members(publisher, database, current["revision"], [outside, separate])
+    owner_grant(publisher, database, reader, "read")
     request_id = propose(publisher, "photo-journal", {**change, "preset": "viewer"})["requestId"]
     review = preview_request(publisher, request_id)
     conflict = review["databases"][0]["conflicts"]
@@ -135,9 +126,10 @@ def external_changes(publisher, circle, database, reader):
     result = approve(publisher, request_id, preview, choices)
     require(result["status"] == "confirmed" and outside in roster(publisher, database)["members"],
             "outside_scope_retained_after_owner_review")
-    summary("A separate publisher grant survived an app update. An overlapping write grant required review "
+    summary("A separate publisher grant survived an app update. An overlapping grant required review "
             "and remained intact when the owner kept it as a direct grant.")
-    person_requests(publisher, database, reader, separate)
+    person_requests(publisher, database, reader, person)
+    return person
 
 
 def person_requests(publisher, database, reader, separate):
@@ -153,17 +145,13 @@ def person_requests(publisher, database, reader, separate):
         rows = roster(publisher, database)["members"]
         grant = next(row for row in rows if row["nodeKey"] == reader)
         require(result["status"] == "confirmed" and grant["state"] == state and grant["role"] == "read"
-                and "writeSchemas" not in grant and separate in rows, "app_direct_grant_lifecycle")
+                and any(row["nodeKey"] == separate for row in rows), "app_direct_grant_lifecycle")
     summary("The app requested an explicit revoke and restore for one person, and the publisher kept "
             "the other independent grant in place.")
 
 
 def independent_update(publisher, circle_id, first, second, reader, schema):
-    current = roster(publisher, first)
-    outside = {"nodeKey": reader, "state": "active", "role": "submit"}
-    put_members(publisher, first, current["revision"], [
-        outside if row["nodeKey"] == reader else row for row in current["members"]
-    ])
+    owner_grant(publisher, first, reader, "submit")
     first_before = roster(publisher, first)
     edit = ("circle", "set", circle_id, "--link", f"{first}={schema}")
     preview = people(publisher, *edit)
@@ -190,7 +178,6 @@ def independent_update(publisher, circle_id, first, second, reader, schema):
     result = people(publisher, "db", "retry", first, "--resolve", f"{first}:{reader}=keep")
     after = roster(publisher, first)
     require(not result["pending"] and member_rows(after) == member_rows(first_before)
-            and "writeSchemas" not in next(row for row in after["members"] if row["nodeKey"] == reader)
             and sdk(publisher, "sharing-status", requestId=request_id)["status"] == "confirmed",
             "app_first_database_finished_without_disturbing_second")
     summary("A pending grant review blocked the same database while a second database confirmed its own "
@@ -203,8 +190,8 @@ def member_rows(config):
 
 def revoke_roster(node, database):
     current = roster(node, database)
-    if any(row["state"] == "active" for row in current["members"]):
-        members = [{"nodeKey": row["nodeKey"], "role": row["role"], "state": "revoked"}
-                   for row in current["members"]]
-        put_members(node, database, current["revision"], members)
-    require(all(row["state"] == "revoked" for row in roster(node, database)["members"]), "circle_cleanup_revoked")
+    for row in current["members"]:
+        if row["state"] == "active":
+            owner_revoke(node, database, row["nodeKey"])
+    require(all(row["state"] == "revoked" for row in roster(node, database)["members"]),
+            "circle_cleanup_revoked")

@@ -122,9 +122,7 @@ def access_report(name, shown, reason):
             access = database.get("selfAccess")
     if not isinstance(access, dict):
         return "%s %s access=absent" % (reason, name)
-    return "%s %s state=%s role=%s write=%s stale=%s" % (
-        reason, name, label(access.get("state")), label(access.get("role")),
-        label(access.get("write")), label(access.get("stale")))
+    return "%s %s role=%s" % (reason, name, label(access.get("role")))
 
 
 def attach(error, roster, database, evidence=False):

@@ -31,8 +31,10 @@ def scope(writes):
 
 
 def grant(member):
-    if not member or member.get("state") == "revoked":
+    if not member or member.get("state") == "revoked" or member.get("role") == "revoked":
         return "no access"
+    if member.get("role") == "write":
+        return "can write directly"
     if member.get("role") == "submit":
         return "can submit changes"
     if member.get("role") == "read":
@@ -43,8 +45,6 @@ def grant(member):
 def cell(key, value):
     if value is None:
         return "-"
-    if key == "memberWrites" and isinstance(value, dict):
-        return ", ".join(f"{name}: {behaviour}" for name, behaviour in sorted(value.items())) or "-"
     if key in ("writeSchemas", "links"):
         return scope(value) if key == "writeSchemas" else ", ".join(
             f"{database}: {scope(writes)}" for database, writes in value.items()) or "-"
@@ -73,7 +73,7 @@ def fields(value, indent=""):
         if isinstance(item, list) and item and all(isinstance(row, dict) for row in item):
             lines.append(f"{indent}{key}:")
             lines.extend(f"{indent}  {line}" for line in table(item).splitlines())
-        elif isinstance(item, dict) and key not in ("writeSchemas", "links", "memberWrites"):
+        elif isinstance(item, dict) and key not in ("writeSchemas", "links"):
             lines.append(f"{indent}{key}:")
             lines.append(fields(item, indent + "  "))
         else:
@@ -93,7 +93,8 @@ def change(value):
     for row in value.get("databases", []):
         title = row["name"] or row["databaseId"]
         if "status" in row:
-            lines.append(f"{title}: {row['status']}" + (f" at revision {row['revision']}" if "revision" in row else ""))
+            tip = f" at entry {row['entryHash']}" if "entryHash" in row else ""
+            lines.append(f"{title}: {row['status']}" + tip)
         elif "error" not in row and not row["changes"]:
             lines.append(f"{title}: access stays the same")
         if "error" in row:
@@ -107,12 +108,13 @@ def change(value):
     if value.get("pending"):
         lines.append(f"unfinished: {', '.join(value['pending'])}. Run `people db retry`.")
     if "status" in value and "databases" not in value:
-        lines.append(f"status: {value['status']}" + (f" at revision {value['revision']}" if "revision" in value else ""))
+        tip = f" at entry {value['entryHash']}" if "entryHash" in value else ""
+        lines.append(f"status: {value['status']}" + tip)
     if value.get("applied") is False or ("token" in value and "applied" not in value):
         lines.append("Nothing was changed. " + ("Approve it with `people request approve`."
                                                 if "requestId" in value else "Rerun with --apply to make this change."))
         if "token" in value:
             lines.append(f"token: {value['token']}")
-    elif "revision" in value and "databases" not in value and "status" not in value:
-        lines.append(f"revoked at revision {value['revision']}")
+    elif "entryHash" in value and "databases" not in value and "status" not in value:
+        lines.append(f"revoked at entry {value['entryHash']}")
     return "\n".join(lines)

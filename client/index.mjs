@@ -16,6 +16,9 @@ export class PeopleError extends Error {
 const invalid = (message) => new PeopleError('invalid_response', message);
 const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 const STATUSES = ['awaitingApproval', 'pending', 'needsReview', 'confirmed', 'declined'];
+/** Database and stream/device ids are Hex32 (64 lowercase hex), not UUID. */
+const HEX32 = /^[0-9a-f]{64}$/;
+const isHex32 = (value) => typeof value === 'string' && HEX32.test(value);
 
 /** Share contacts and databases through People. Use `connect` from `@lastdb/app-sdk` for content. */
 export function peopleClient({ dataDir, peoplePath = 'people', lastdbPath }) {
@@ -122,33 +125,38 @@ export function peopleClient({ dataDir, peoplePath = 'people', lastdbPath }) {
       return database;
     },
 
-    /** Revoke a person's grant and return the applied revision. */
+    /** Revoke a person's grant and return the signed chain entry hash. */
     async revokeAccess(database, nodeKey) {
       const result = await run(['grant', 'revoke'], ['--apply', '--', database, nodeKey]);
-      if (!isObject(result) || typeof result.revision !== 'string' || result.state !== 'revoked'
-        || result.nodeKey !== nodeKey || typeof result.databaseId !== 'string') {
+      if (!isObject(result) || typeof result.entryHash !== 'string' || result.state !== 'revoked'
+        || result.nodeKey !== nodeKey || !isHex32(result.databaseId)) {
         throw invalid('People returned an invalid revoke receipt');
       }
-      return result.revision;
+      return result.entryHash;
     },
   };
 }
 
 /** The database row People prints. It is LastDB's own row, returned as given. */
 function parseDatabase(value) {
-  if (isObject(value) && typeof value.id === 'string' && value.id.length > 0) return value;
+  if (isObject(value) && isHex32(value.id)) return value;
   throw invalid('People returned an invalid database');
 }
 
 function parseSharingStatus(value, expectedId) {
   if (isObject(value)) {
-    const { requestId, databaseId, status, revision, error } = value;
-    if (requestId === expectedId && typeof databaseId === 'string' && STATUSES.includes(status)
-      && (revision === undefined || typeof revision === 'string')
+    const { requestId, databaseId, status, entryHash, writerSeq, error } = value;
+    if (requestId === expectedId && isHex32(databaseId) && STATUSES.includes(status)
+      && (entryHash === undefined || typeof entryHash === 'string')
+      && (writerSeq === undefined || typeof writerSeq === 'number')
       && (error === undefined || typeof error === 'string')
-      && (status !== 'confirmed' || typeof revision === 'string')) {
-      return { requestId, databaseId, status, ...(revision === undefined ? {} : { revision }),
-        ...(error === undefined ? {} : { error }) };
+      && (status !== 'confirmed' || typeof entryHash === 'string')) {
+      return {
+        requestId, databaseId, status,
+        ...(entryHash === undefined ? {} : { entryHash }),
+        ...(writerSeq === undefined ? {} : { writerSeq }),
+        ...(error === undefined ? {} : { error }),
+      };
     }
   }
   throw invalid('People returned invalid sharing status');
@@ -156,32 +164,30 @@ function parseSharingStatus(value, expectedId) {
 
 function parseInvitation(result) {
   if (isObject(result)) {
-    const { databaseId, revision, publisher, invitation } = result;
-    if (typeof databaseId === 'string' && typeof revision === 'string'
-      && typeof publisher === 'string' && typeof invitation === 'string' && invitation.length > 0) {
-      return { databaseId, revision, publisher, invitation };
+    const { databaseId, entryHash, writerSeq, publisher, invitation } = result;
+    if (isHex32(databaseId) && typeof entryHash === 'string'
+      && typeof publisher === 'string' && typeof invitation === 'string' && invitation.length > 0
+      && (writerSeq === undefined || typeof writerSeq === 'number')) {
+      return {
+        databaseId, entryHash, publisher, invitation,
+        ...(writerSeq === undefined ? {} : { writerSeq }),
+      };
     }
   }
   throw invalid('People returned an invalid invitation receipt');
 }
 
-function memberWritesOk(value) {
-  if (value === 'pending') return true;
-  return isObject(value) && Object.values(value).every((item) =>
-    item === 'owner_only' || item === 'own_records' || item === 'shared');
-}
-
 function parseSetup(result, request) {
   if (isObject(result)) {
-    const { databaseId, name, setupName, version, definitions, memberWrites } = result;
-    if (typeof databaseId === 'string' && databaseId.length > 0
+    const { databaseId, name, setupName, version, definitions } = result;
+    if (isHex32(databaseId)
       && (request.databaseId === undefined || databaseId === request.databaseId)
       && (name === null || typeof name === 'string')
       && setupName === request.setupName && version === (request.requiredVersion ?? 1)
-      && isObject(definitions) && memberWritesOk(memberWrites)) {
+      && isObject(definitions)) {
       const ids = Object.values(definitions);
-      if (ids.length > 0 && ids.every((id) => typeof id === 'string' && /^[0-9a-f]{64}$/.test(id))) {
-        return { databaseId, name, setupName, version, definitions, memberWrites };
+      if (ids.length > 0 && ids.every(isHex32)) {
+        return { databaseId, name, setupName, version, definitions };
       }
     }
   }

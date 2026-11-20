@@ -30,7 +30,8 @@ account.
 A failed command throws `PeopleError` with `code: 'command_failed'` and
 People's own `people: ...` line as the message. Output of an unexpected shape
 throws `PeopleError` with `code: 'invalid_response'`. A database result is the
-row People prints, which is LastDB's own database row; `id` is always present.
+row People prints, which is LastDB's own database row; `id` is a Hex32
+(64 lowercase hex), never a UUID. Sharing-request ids remain UUIDs.
 
 ## Share an app's own database
 
@@ -128,10 +129,10 @@ further changes to its database. Distinct databases can proceed with their own
 owner review.
 
 The row `acceptInvitation` returns, and `listDatabases` in the app SDK, expose
-the receiving node's `selfAccess` when available. An initial response can be
-unknown while access is confirmed. An active grant with `stale: false` can
-guide which write actions the app displays. The publisher still checks each
-proposal.
+the receiving node's `selfAccess` when available. After LastDB #1805 that object
+is `{ role: "read" | "submit" | "write" }` (no `state` / `stale`). A revoked
+key omits `selfAccess`. Use `role` to guide which write actions the app shows.
+The publisher still checks each proposal.
 
 ## Use a named database setup
 
@@ -152,12 +153,9 @@ const albums = root.select(verified.databaseId);
 albums.rememberDefinition('social/Album', verified.definitions['social/Album']!);
 ```
 
-The setup result includes `memberWrites`. It is the stored map when People
-confirmed the share configuration, and `"pending"` when this node has no
-cloud account. A pending create still places the schemas. Once the node is
-connected, `people db verify ID --setup shared-albums --finish` sets the map.
-A database that is still enrolling fails the command and tells you to run it
-again. `share configuration is not confirmed` fails the command as well.
+Access comes from publisher-signed grant entries on the LastDB chain. The
+member role is `read`, `submit`, or `write` (plus `revoked`). There is no
+database-wide write map.
 
 Verification by ID also works on a received share once it has synced its
 schemas. Setup version 1 requires the catalog's schema shapes and leaves

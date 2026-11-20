@@ -13,8 +13,9 @@ from direct_publish import begin_ana_publish, note_ana_publish
 from direct_report import access_report, attach, label, row_report, watch, watch_rows
 from people_app import install, people, write_owned
 from share_node import (
-    READ_ONLY, SCHEMA, await_defaults, connect, declare, keyed, local_node, no_cloud_account,
-    node_key, note, proposal, put_settings, report, submit_proposal, write_member,
+    READ_ONLY, SCHEMA, await_empty_grants, connect, declare, ensure_relay, hex32_id, keyed,
+    local_node, no_cloud_account, node_key, note, owner_grant, proposal, report, submit_proposal,
+    write_member,
 )
 from support import OperationError, run_operation, running
 
@@ -29,14 +30,19 @@ def yes(value):
 
 def create(publisher, name):
     created = people(publisher, "db", "create", name)
-    database = str(uuid.UUID(created["id"]))
-    if database != created["id"] or created.get("sharingMode") != "whole_database":
-        fail("direct_database", "id=%s mode=%s" % (yes(database == created["id"]), label(created.get("sharingMode"))))
+    database = created.get("id")
+    try:
+        database = hex32_id(database, "direct_database")
+    except OperationError:
+        fail("direct_database", "id=%s mode=%s" % (yes(False), label(created.get("sharingMode"))))
+    if created.get("sharingMode") != "whole_database":
+        fail("direct_database", "id=%s mode=%s" % (yes(True), label(created.get("sharingMode"))))
     report("Owned DEV mutation log %s for %s." % (database, name))
     return database
 
 
 def grant(publisher, database, person, scope, granted):
+    # Org members use --write write (chain Role::Write). Share submit uses all.
     arguments = ("grant", "set", database, person, "--write", scope)
     preview = people(publisher, *arguments)
     token = preview.get("token")
@@ -78,10 +84,11 @@ def enroll(programs, publisher, members, root):
 
 def wait_role(node, database, role, write, stage, name):
     def done(shown):
-        access = shown["database"]["selfAccess"]
-        return (access.get("state") == "active" and access.get("stale") is False and access.get("confirmedAtMs")
-                and access.get("role") == role and (write is None or access.get("write") == write))
+        access = (shown.get("database") or {}).get("selfAccess") or {}
+        # #1805 selfAccess is `{role}` only.
+        return access.get("role") == role
 
+    del write
     watch(stage, lambda: people(node, "db", "show", database), done,
           lambda shown, reason: access_report(name, shown, reason))
 
@@ -159,24 +166,22 @@ def refuse_reader(member, database):
     report("C was refused before a local record. The write route returned 403, a received database is read only.")
 
 
-def close_direct(publisher, named, database, definition):
-    stored = put_settings(publisher, database, write="proposals")
-    write = stored.get("write") if isinstance(stored, dict) else None
-    member_writes = stored.get("memberWrites") if isinstance(stored, dict) else None
-    schema_write = member_writes.get(SCHEMA) if isinstance(member_writes, dict) else None
-    if write != "proposals" or schema_write != "shared":
-        fail("direct_proposals_settings", "write=%s schema=%s" % (label(write), label(schema_write)))
+def close_direct(publisher, named, database, definition, keys):
+    # Lower Org write grants to Share submit via signed grant entries.
+    for person, key in (("Ana", keys["Ana"]), ("Bo", keys["Bo"])):
+        owner_grant(publisher, database, key, "submit")
+        del person
     member = named[1][1]
     outcome = write_member(member, database, note("After proposals", "direct-closed"))
     if outcome == "committed":
         watch("direct_undone", lambda: keyed(member, database, ["direct-closed"])[0], lambda row: row is None,
               lambda row, reason: row_report(("Ana",), [row], reason))
-        report("A committed the write locally. The refusal removed it, and the key is now absent on A.")
+        report("A committed the write locally. After role reduction the refusal removed it.")
     else:
         row = keyed(member, database, ["direct-closed"])[0]
         if row is not None:
             fail("direct_refused_record_kept", row_report(("Ana",), [row], "differed"))
-        report("A was refused before a local record. The write route returned 403, a received database is read only.")
+        report("A was refused before a local record after the write→submit reduction.")
     for name, node in named:
         row = keyed(node, database, ["direct-closed"])[0]
         if row is not None:
@@ -184,7 +189,7 @@ def close_direct(publisher, named, database, definition):
     submit_proposal(named[2][1], database, proposal(definition, "proposed", "Through a proposal"))
     watch_rows(named, database, "proposed", "direct_proposal",
                lambda rows: all(row and row["fields"].get("text") == "Through a proposal" for row in rows))
-    report("With write set to proposals, B's change was published through the proposal log.")
+    report("After reducing to submit, B's change was published through a proposal entry.")
 
 
 def share(programs, root, publisher, member_a, member_b, member_c, database, definition, granted):
@@ -192,8 +197,8 @@ def share(programs, root, publisher, member_a, member_b, member_c, database, def
     for node in (member_a, member_b, member_c):
         no_cloud_account(node)
     publisher_key, keys = enroll(programs, publisher, members, root)
-    grant(publisher, database, "Ana", "all", granted)
-    grant(publisher, database, "Bo", "all", granted)
+    grant(publisher, database, "Ana", "write", granted)
+    grant(publisher, database, "Bo", "write", granted)
     grant(publisher, database, "Cam", "read", granted)
     for person, node, local_name in (("Ana", member_a, "from-ana"), ("Bo", member_b, "from-bo"), ("Cam", member_c, "from-cam")):
         handoff(publisher, node, database, person, publisher_key, local_name)
@@ -201,8 +206,8 @@ def share(programs, root, publisher, member_a, member_b, member_c, database, def
     for person, node in members:
         watch_rows(((person, node),), database, "seed", "direct_seed",
                    lambda rows: rows[0] and rows[0]["fields"].get("text") == "Seed")
-    wait_role(member_a, database, "submit", "direct", "direct_access_a", "Ana")
-    wait_role(member_b, database, "submit", "direct", "direct_access_b", "Bo")
+    wait_role(member_a, database, "write", None, "direct_access_a", "Ana")
+    wait_role(member_b, database, "write", None, "direct_access_b", "Bo")
     wait_role(member_c, database, "read", None, "direct_access_c", "Cam")
     outcome = write_member(member_a, database, note("From Ana", "direct-1"))
     if outcome != "committed":
@@ -212,7 +217,7 @@ def share(programs, root, publisher, member_a, member_b, member_c, database, def
     same_key(named, database, {"from-a": keys["Ana"], "from-b": keys["Bo"]})
     follow(named, member_c, database, keys["Ana"])
     refuse_reader(member_c, database)
-    close_direct(publisher, named, database, definition)
+    close_direct(publisher, named, database, definition, keys)
 
 
 def revoke(publisher, database, granted, failed):
@@ -226,7 +231,7 @@ def revoke(publisher, database, granted, failed):
         except OperationError as failure:
             error = error or failure
     if granted and error is None:
-        report("ExeMem confirmed the final recipient revocations.")
+        report("Signed revokes were confirmed for the final recipients.")
     if error and not failed:
         raise error
 
@@ -242,8 +247,8 @@ def operation(programs, root, publisher, recipient, api_key):
         definition = declare(publisher, database)
         write_owned(publisher, database, note("Seed", "seed"))
         connect(programs, publisher, api_key)
-        await_defaults(publisher, database)
-        put_settings(publisher, database, write="direct", memberWrites={SCHEMA: "shared"})
+        await_empty_grants(publisher, database)
+        ensure_relay(publisher, database)
         member_b = local_node(programs, root, "bo")
         member_c = local_node(programs, root, "cam")
     except OperationError as error:

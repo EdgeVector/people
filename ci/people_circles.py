@@ -11,11 +11,12 @@ from circle_comments import (
     verify_settled_retry,
 )
 from circle_report import (
-    attach, cell, check, fail, mark, require_absent, saw, wait, wait_field,
+    attach, cell, check, fail, mark, saw, wait, wait_field,
 )
 from direct_nodes import clip_public
 from node import Connection
-from people_app import expect_setup_member_writes_pending, extend_member_writes, install, observe_access, read_records, sdk, people, write_owned
+from people_app import expect_setup_offline, install, observe_access, read_records, sdk, people, write_owned
+from share_node import ensure_relay, hex32_id
 from people_declarations import configure_bindings, external_changes, independent_update, revoke_roster
 from people_log_views import scope_for
 from support import OperationError, decode_json, run_operation, summary
@@ -29,6 +30,8 @@ REFUSALS = (
     ("select writable schemas", "circle_invalid_schema_selection"),
     ("save verified contacts", "circle_contact_unavailable"),
     ("share configuration is not confirmed", "circle_lastdb_unconfirmed"),
+    ("grant_unconfirmed", "circle_lastdb_unconfirmed"),
+    ("signed_history_unconfirmed", "circle_lastdb_unconfirmed"),
     ("share_configuration_unconfirmed", "circle_lastdb_unconfirmed"),
     ("invalid_share_configuration", "circle_lastdb_rejected_config"),
     ("the share configuration is at another revision", "circle_revision_changed"),
@@ -167,11 +170,11 @@ def transfer(programs, root, publisher, recipient, api_key):
 def _transfer(programs, root, publisher, recipient, api_key, name, state):
     if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
-    expect_setup_member_writes_pending(recipient, f"{name}-offline")
+    expect_setup_offline(recipient, f"{name}-offline")
     created = sdk(publisher, "create-shared", name=name)
     check(created["sharingMode"] == "whole_database" and created["name"] == name, "circle_sdk_create",
           saw("create", mode=created.get("sharingMode"), name_match=created.get("name") == name))
-    database = created["id"]
+    database = hex32_id(created["id"], "circle_database")
     state["database"] = database
     report(f"Owned DEV mutation log {database} for {name} through the packaged SDK.")
     second = create_database(publisher, f"{name}-second")
@@ -185,6 +188,7 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
     scope = scope_for(publisher, api_key)
     publisher.keep_saved_credentials = True
     publisher.start()
+    ensure_relay(publisher, database)
     contact = root / "recipient.contact"
     reader = programs.command(recipient.home, ["share", "contact", "--out", str(contact)])["recipient_public_key"]
     sender = programs.command(publisher.home, ["share", "contact", "--out", str(root / "owner.contact")])["recipient_public_key"]
@@ -192,16 +196,17 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
     people(publisher, "person", "add", "Ana", "--node-key", reader, "--contact", str(contact), refusals=REFUSALS)
     wait_cloud("circle_cloud_ready", publisher, database)
     placed = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
-    check(placed["databaseId"] == database and placed["memberWrites"] != "pending", "circle_setup_finish",
-          saw("setup", id_match=placed.get("databaseId") == database, pending=placed.get("memberWrites") == "pending"))
+    check(placed["databaseId"] == database and "memberWrites" not in placed
+          and set(placed["definitions"]) >= {ALBUM, COMMENT}, "circle_setup_finish",
+          saw("setup", id_match=placed.get("databaseId") == database,
+              schemas=len(placed.get("definitions") or {})))
     definitions.update(placed["definitions"])
-    member_writes = extend_member_writes(publisher, database, {COMMENT: "shared", ALBUM: "owner_only"})
     shown = set(people(publisher, "db", "show", database)["schemas"])
     check(set(definitions).issubset(shown), "circle_schema_catalog_missing",
           saw("schemas", missing=len(set(definitions) - shown)))
     wait_cloud("circle_second_cloud_ready", publisher, second)
     try:
-        share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender, member_writes)
+        share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender)
     finally:
         failed = sys.exc_info()[0] is not None
         cleanup_error = None
@@ -215,7 +220,7 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
             raise cleanup_error
 
 
-def share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender, member_writes):
+def share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender):
     created = edit_circle(publisher)
     circle = created["circle"]
     check(revisions(created) == {} and circle["name"] == "Family" and not circle["members"]
@@ -223,25 +228,30 @@ def share_with_circle(publisher, recipient, database, second, definitions, scope
           saw("circle", revisions=len(revisions(created)), name=circle.get("name"),
               members=bool(circle.get("members")), links=bool(circle.get("links"))))
     configure_bindings(publisher, circle, database, second, COMMENT_GRANT["names"])
-    same_revisions(edit_circle(publisher, "--members", reader), {database: "1", second: "1"}, "circle_grant_revisions")
+    granted = edit_circle(publisher, "--members", reader)
+    check(all(row.get("status") == "confirmed" for row in granted["databases"]),
+          "circle_grant_applied", saw("grant", statuses=[row.get("status") for row in granted["databases"]]))
     receipt = sdk(publisher, "seal", database=database, nodeKey=reader)
-    check(receipt["publisher"] == sender and receipt["databaseId"] == database and receipt["revision"] == "1",
+    check(receipt["publisher"] == sender and receipt["databaseId"] == database
+          and isinstance(receipt.get("entryHash"), str),
           "circle_sdk_sealed_invitation",
           saw("seal", publisher=receipt.get("publisher") == sender, database=receipt.get("databaseId") == database,
-              revision=receipt.get("revision")))
-    exercise(publisher, recipient, database, receipt, definitions, scope, member_writes)
+              tip=isinstance(receipt.get("entryHash"), str)))
+    exercise(publisher, recipient, database, receipt, definitions, scope)
     exercise_comment_ownership(publisher, recipient, database, definitions, scope, reader)
     second_receipt = people(publisher, "invite", second, reader)
     people(recipient, "db", "accept", "--publisher", sender, "--name", "second", stdin=second_receipt)
     wait_text("Ana", recipient, second, COMMENT, "seed", "Second database", "circle_second_database_read")
-    observe_access(recipient, second, "active", 1)
-    definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT], scope, member_writes)
+    observe_access(recipient, second, "active")
+    definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT], scope)
     read_links = ("--link", f"{database}=read", "--link", f"{second}={COMMENT}")
     preview = people(publisher, "circle", "set", "Family", *read_links)
     people(publisher, "grant", "revoke", second, reader, "--apply")
     people(publisher, "circle", "set", "Family", *read_links, "--apply", "--token", preview["token"],
            refusal=b"sharing changed since the preview")
-    same_revisions(edit_circle(publisher, *read_links), {database: "2", second: "2"}, "circle_reader_revision")
+    reduced = edit_circle(publisher, *read_links)
+    check(all(row.get("status") == "confirmed" for row in reduced["databases"]),
+          "circle_reader_applied", saw("reduce", statuses=[row.get("status") for row in reduced["databases"]]))
     observe_access(recipient, second, "revoked")
     exercise_reader(publisher, recipient, database, definitions, scope)
     external_changes(publisher, circle, database, reader)
@@ -270,23 +280,17 @@ def edit_circle(owner, *arguments):
 
 
 def revisions(response):
-    return {row["databaseId"]: row["revision"] for row in response["databases"]}
-
-
-def same_revisions(response, expected, code):
-    found = revisions(response)
-    values = ".".join(sorted(str(item) for item in found.values()))
-    check(found == expected, code, saw("revisions", match=found == expected, values=values))
+    return {row["databaseId"]: row.get("entryHash") for row in response["databases"]
+            if isinstance(row.get("entryHash"), str)}
 
 
 def wait_cloud(stage, node, database):
-    wait(stage, lambda: people(node, "db", "show", database), lambda row: _sharing_revision(row) == "0",
-         lambda row, reason: saw(reason, revision=_sharing_revision(row)))
+    def empty(row):
+        sharing = row.get("sharing") if isinstance(row, dict) else None
+        return isinstance(sharing, dict) and sharing.get("members") == []
 
-
-def _sharing_revision(row):
-    sharing = row.get("sharing") if isinstance(row, dict) else None
-    return sharing.get("revision") if isinstance(sharing, dict) else None
+    wait(stage, lambda: people(node, "db", "show", database), empty,
+         lambda row, reason: saw(reason, members=(row.get("sharing") or {}).get("members")))
 
 
 def cleanup(publisher, database):
@@ -297,7 +301,7 @@ def cleanup(publisher, database):
     check(roster.get("members") is not None, "circle_cleanup_roster_unavailable",
           saw("roster", status=roster.get("status"), members=roster.get("members") is not None))
     revoke_roster(publisher, database)
-    report("ExeMem confirmed the final recipient revocations.")
+    report("Signed revokes confirmed the final recipient removals.")
 
 
 def connect(programs, publisher, api_key):
@@ -311,7 +315,7 @@ def connect(programs, publisher, api_key):
               saved=receipt.get("credentials_saved")))
 
 
-def exercise(publisher, recipient, database, receipt, definitions, scope, member_writes):
+def exercise(publisher, recipient, database, receipt, definitions, scope):
     accepted = sdk(recipient, "accept", receipt=receipt, publisher=receipt["publisher"], name="family")
     check(accepted["id"] == database and accepted["sharingMode"] == "whole_database", "circle_received_database",
           saw("accept", id_match=accepted.get("id") == database, mode=accepted.get("sharingMode")))
@@ -323,28 +327,26 @@ def exercise(publisher, recipient, database, receipt, definitions, scope, member
           "%s %s" % (cell("Ana", album, "text"), cell("viewer", second_app, "text")))
     check(album["fields"]["text"] == f"Initial {ALBUM}", "circle_sdk_read_shared_content", cell("Ana", album, "text"))
     report("The packaged SDK used People to create a whole-database share, seal a circle invitation and accept it. The recipient read shared data through the LastDB SDK.")
-    observe_access(recipient, database, "active", 1, role="submit", member_writes=member_writes)
+    observe_access(recipient, database, "active", role="submit")
     sdk_access = next(row for row in sdk(recipient, "list-databases") if row["id"] == database)["selfAccess"]
-    check(sdk_access["state"] == "active" and sdk_access["stale"] is False and sdk_access["role"] == "submit"
-          and sdk_access.get("memberWrites") == member_writes, "circle_sdk_confirmed_grant",
-          saw("grant", state=sdk_access.get("state"), role=sdk_access.get("role"), stale=sdk_access.get("stale"),
-              writes=sdk_access.get("memberWrites") == member_writes))
+    check(isinstance(sdk_access, dict) and sdk_access.get("role") == "submit"
+          and "memberWrites" not in sdk_access, "circle_sdk_confirmed_grant",
+          saw("grant", role=sdk_access.get("role")))
     created = mutation(COMMENT, definitions[COMMENT], "allowed", "From Ana")
     created["metadata"] = {"share_author": "unverified-author"}
     updates = [
-        mutation(ALBUM, definitions[ALBUM], "blocked", "Cannot write"),
         created,
         mutation(COMMENT, definitions[COMMENT], "seed", "A create cannot replace the seed"),
     ]
     queued = queue_and_restart(publisher, recipient, database, scope, updates,
                                check_status=True)
     verify_results(recipient, database, queued)
-    verify_settled_retry(publisher, recipient, database, scope, updates[1], queued[1])
+    verify_settled_retry(publisher, recipient, database, scope, updates[0], queued[0])
     for name, node in (("publisher", publisher), ("Ana", recipient)):
         wait_text(name, node, database, COMMENT, "allowed", "From Ana", "circle_authorized_write_applied")
-        require_absent(name, query(node, database, ALBUM, "blocked"), "circle_forbidden_write_missing", "text")
         wait_text(name, node, database, COMMENT, "seed", f"Initial {COMMENT}", "circle_invalid_create_discarded")
-    message = "The publisher kept Ana's Comment and discarded the Album write and the create that targeted the seed."
+    message = ("Ana's submit-role proposal for Comment was incorporated. The create that "
+               "targeted the existing seed was discarded. Access came from the chain grant role.")
     print(message, flush=True)
     summary(message)
 

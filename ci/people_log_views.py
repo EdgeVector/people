@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -11,6 +12,7 @@ from node_auth import NodeKey, authorization
 from support import OperationError, decode_json, dev_endpoint, require
 
 ROOT = "/api/cloud/backups/v2"
+HEX32 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -80,15 +82,18 @@ def pending_positions(publisher, recipient, scope, database, mutation_ids, publi
     publisher_key, published = owner
     _, page = owner_inbox
     recipient_key = reader_inbox[0]
-    pending = {row["entry"]["device_id"]: int(row["delivery_seq"]) for row in page["entries"]
+    # device_id is Hex32 (stream id), not UUID or member-<uuid>.
+    pending = [row for row in page["entries"]
                if row["entry"]["node_public_key"] == recipient_key
-               and row["entry"]["namespace"] == "lastdb-member-submission"}
-    expected = {f"member-{mutation_id}" for mutation_id in mutation_ids}
-    require(set(pending) == expected, "circle_publisher_sees_all_pending_submissions")
+               and row["entry"]["namespace"] == "lastdb-member-submission"]
+    require(len(pending) == len(mutation_ids), "circle_publisher_sees_all_pending_submissions")
+    for row in pending:
+        require(isinstance(row["entry"].get("device_id"), str)
+                and HEX32.fullmatch(row["entry"]["device_id"]), "circle_pending_device_id")
     published_after = published_views(recipient, scope, database)
     require(published_after[0]["entries"], "circle_exemem_receiver_has_published_entries")
     require(published_after == published_before, "circle_inbox_did_not_advance_published_log")
     for view_body in (published, *published_after):
         require(all(row["entry"]["node_public_key"] == publisher_key for row in view_body["entries"]),
                 "circle_exemem_receiver_only_publisher_entries")
-    return max(pending.values())
+    return max(int(row["delivery_seq"]) for row in pending)

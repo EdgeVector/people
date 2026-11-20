@@ -22,8 +22,9 @@ lists the extension `databases`. The JSON body carries `action`:
 | --- | --- |
 | `list`, `create`, `accept` | List databases, create one, accept an invitation |
 | `schemas`, `declare_schema` | Read a database's schemas, place a setup schema |
-| `share_config`, `set_share_config` | Read and update the roster |
-| `invite` | Seal an invitation |
+| `grant`, `revoke`, `grants` | Append or fold publisher-signed chain grants (authority) |
+| `heads`, `relays`, `bootstrap_relay` | Signed heads for comparison; relay URL bootstrap |
+| `invite` | Seal an invitation for a person who already has a chain grant |
 | `submit`, `submission_status` | A content app submits one proposal and reads its state. People's own commands do not call these |
 
 `declare_schema` sends `app_id` from the catalog on the app socket and on the
@@ -138,10 +139,10 @@ people grant revoke family Cal --apply
 people grant restore family Cal --write read --apply
 ```
 
-`invite` produces JSON with `databaseId`, `revision`, `publisher`, and
-`invitation`. With `--out` it writes that receipt to a file only you can read.
-Without it the receipt goes to standard output. Hand the sealed receipt to
-the recipient. Keep it out of logs.
+`invite` produces JSON with `databaseId`, `entryHash`, `writerSeq`,
+`publisher`, and `invitation`. With `--out` it writes that receipt to a file
+only you can read. Without it the receipt goes to standard output. Hand the
+sealed receipt to the recipient. Keep it out of logs.
 The recipient accepts it with the publisher's independently verified key:
 
 ```sh
@@ -149,8 +150,9 @@ people db accept ana-invitation.json --publisher "$trusted_publisher_key" --name
 ```
 
 `db accept` returns LastDB's received database metadata. The local LastDB
-syncs its records from ExeMem. `db show` reports the recipient's cloud access
-and downloaded record readiness separately.
+bootstraps the first relay URL from the publisher-signed `relays` entry and
+replays the signed log. `db show` reports folded chain grants and signed
+heads for comparison.
 
 Compatible schema upgrades keep a grant in place. The publisher still checks
 the specific current definition and the record rules for each write. On a
@@ -169,32 +171,29 @@ so that rule applies to comments in the setup.
 
 `people db create family --setup shared-albums` creates a whole-database share
 and places `social/Album`, `social/AlbumItem`, `social/Photo`, and
-`social/Comment` through the `declare_schema` action. It also sets the
-member-write map when the share configuration is confirmed. The node owns
-the wait for cloud enrollment, up to 30 seconds. People does not wait and
-does not retry.
+`social/Comment` through the `declare_schema` action. The node owns the wait
+for cloud enrollment, up to 30 seconds. People does not wait and does not
+retry.
 
 A node with no cloud account answers HTTP 409, `this node has no cloud
 account`. `db create --setup` and `db verify --setup` do not fail. The
-database exists, the schemas are placed, the JSON result has
-`"memberWrites": "pending"`, and standard error says to run
+database exists and the schemas are placed. Run
 `people db verify ID --setup shared-albums --finish` once the node is
-connected. That command sets the map.
+connected if setup was interrupted.
 
 HTTP 503 `the database is still enrolling with the cloud; retry`, and any
 other HTTP 503, is an error. People exits non-zero and tells you to run the
-same command again. `share configuration is not confirmed` is an error too.
-It means the node is enrolled and connected, and the service answer could
-not be confirmed.
+same command again. A grant-chain confirmation failure is an error too: the
+node is enrolled and connected, and the service answer could not be
+confirmed.
 
 People records the new database ID before placing those schemas, and resumes
 setup by the same name. `people db verify ID --setup shared-albums` checks an
 owned or received share by its stable ID and reports the current definition
-IDs. Add `--finish` to install missing schemas in an owned database and to
-set the member-write map. Additive schema updates can introduce more fields
-under the same name. When replacing a record, read it first, retain the
-fields and keys you aren't editing, and send the replacement against the
-record's current revision.
+IDs. Add `--finish` to install missing schemas in an owned database.
+Additive schema updates can introduce more fields under the same name. When
+replacing a record, read it first, retain the fields and keys you aren't
+editing, and send the replacement against the record's current revision.
 
 ## Sharing proposals from apps
 
@@ -227,37 +226,41 @@ outside that trust boundary before treating owner approval as app isolation.
 
 ## How sharing works
 
-An active member with role `submit` can send an encrypted change to the
-pending mutation log. The receiver posts `POST /v1/x/databases` with
-`"action": "submit"`, the database id, the mutation document, and
-`idempotency_key` (one non-nil lowercase UUID). The call answers 202 with
-`ok`, `status: submitted`, `mutation_id`, and `submission_sequence`. It does
-not write a record on the receiver. An owned database or an unknown id
-answers 404. A share that is not a whole database answers 403. A member
-whose role is `read` is refused: HTTP 403, code `permission_denied`, message
-`this member cannot submit this shared mutation`, and no `Retry-After`. Do
-not retry. The publisher does not receive that proposal. Only the
-publisher's LastDB can read pending changes. It checks each accepted
-proposal against the member-write map, discards refusals, and uploads
-accepted changes to the separate published log. Receivers follow that log
-and can read the resulting record after it syncs, with `POST /v1/read` and
-the `database` field. An app that
-wants to show the sender's own change before the publisher accepts it uses
+An active member with role `submit` can propose a change. The receiver posts
+`POST /v1/x/databases` with `"action": "submit"`, the database id, the
+mutation document, and `idempotency_key` (one non-nil lowercase UUID). The
+call answers 202 with `ok`, `status: submitted`, `mutation_id`, and
+`submission_sequence`. It does not write a record on the receiver. An owned
+database or an unknown id answers 404. A share that is not a whole database
+answers 403. A member whose role is `read` is refused: HTTP 403, code
+`permission_denied`, message `this member cannot submit this shared mutation`,
+and no `Retry-After`. Do not retry. The publisher does not receive that
+proposal. Only the publisher's LastDB can read pending changes. It
+incorporates accepted proposals onto the signed history. Receivers follow
+that log and can read the resulting record after it syncs, with
+`POST /v1/read` and the `database` field. An app that wants to show the
+sender's own change before the publisher accepts it uses
 `"action": "submission_status"` and shows that pending state.
-`POST /v1/write` to a received database is refused: the database is read only.
-[How sharing works](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/shared-database-mutation-logs.md)
+`POST /v1/write` to a received database is refused unless the member's chain
+role is `write`.
+[How sharing works](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/cloud-api.md)
 
-People changes must preserve the two logs, the signed per-database roster and
-schema grants, and the publisher's authority to approve each mutation.
-[Requirements to preserve](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/shared-database-mutation-logs.md#requirements-to-preserve)
+People turns Share, Deliver and Org into publisher-signed grant and revoke
+chain entries through LastDB. People may carry signed heads for comparison
+only and bootstraps the first relay URL from a publisher-signed `relays`
+entry. A grant that exists only in People is never authoritative.
+[Relay protocol](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/relay-protocol.md)
 
 ## What members can change
 
-A shared database has one map, `memberWrites`, set by the publisher. Each schema in the map is `owner_only`, `own_records`, or `shared`. A schema that is not in the map is `owner_only`. The albums setup sets `social/Album`, `social/AlbumItem`, and `social/Photo` to `owner_only`, and `social/Comment` to `own_records`.
-
-A member with role `read` cannot submit. That proposal is a final HTTP 403, code `permission_denied`, message `this member cannot submit this shared mutation`, with no `Retry-After`. A member with role `submit` can submit. The publisher accepts or discards each of those submissions from the map and the member's role. Under `own_records`, a member can create a record, and can change or delete a record they created. Under `owner_only`, the publisher discards the member's write. Under `shared`, a member can write any record.
-
-People does not send a per-member schema list for this. A circle link or a preset still chooses `read` or `submit`. What a member may change is `selfAccess.memberWrites` together with the member's role.
+There is no database-wide write map. Access is the per-member role on the
+publisher-signed grant chain: `read`, `submit`, `write`, or `revoked`. People
+reads that role from the grant (and from `selfAccess` once LastDB folds
+`GrantState`). Deliver uses `grant#any`/`read`. Org uses `write`. Share uses
+`submit` for proposals. A member with role `read` cannot submit. A circle
+link or a preset still chooses `read` or `submit` (or `write` for Org).
+LastDB authorizes `invite` from the folded chain grant, not from ExeMem
+members.
 
 ## Choosing a database for an app
 
@@ -295,14 +298,32 @@ A pull request gets syntax, manifest and command-grammar checks
   of a poll ignore this rule and always start sharing.
 - Every day at 09:23 UTC (`23 9 * * *`).
 - A manual dispatch from `main`. Leave `lastdb_release` empty to use the
-  newest published nightly, or set it to a tag.
+  newest published nightly, or set it to a tag. Or set `lastdb_source_sha` to
+  a 40-hex LastDB commit that includes the People UDS grants (mutually
+  exclusive with `lastdb_release`); the job builds `lastdb`/`lastdbd` from
+  that public SHA (default on dispatch: the #1805 merge
+  `8f3ed348bc6e3954ca4cba123a52cca79ceaa463`). Set `relay_url` to the ExeMem
+  DEV HTTP origin (`https://….execute-api….amazonaws.com`, no `/relay` path,
+  no credentials). Empty `relay_url` uses `environments.dev.exemem_api` from
+  the LastDB source under test.
 
-Push runs and the daily run also use the newest published nightly.
+Push runs and the daily run also use the newest published nightly and the
+default DEV relay origin.
+
+Database and stream/device ids are 64-character lowercase hex (Hex32), not
+UUID. Sharing-request and circle ids remain UUIDs.
 
 To re-run a red nightly by hand:
 
 ```
 gh workflow run dev-sharing.yml -R EdgeVector/people --ref main -f mode=all -f lastdb_release=<tag>
+```
+
+To prove against a pinned LastDB SHA and the live DEV relay:
+
+```
+gh workflow run dev-sharing.yml -R EdgeVector/people --ref main \
+  -f mode=all -f lastdb_source_sha=<40-hex> -f relay_url=https://….execute-api….amazonaws.com
 ```
 
 A red run on `main` from a schedule or a push opens or updates one GitHub
@@ -321,10 +342,10 @@ the app socket, with `people` registered:
 | Mode | What it proves |
 | --- | --- |
 | `people-share` | Save a contact, set up `shared-albums`, grant, invite, accept, read, revoke and restore on a whole-database share, with two scoped content clients |
-| `people-circles` | Circles on a database whose setup set the member-write map, allowed and refused writes, app sharing requests, grants changed outside People, direct grant, revoke and restore |
+| `people-circles` | Circles grant submit from the chain role, Comment proposals, app sharing requests, grants changed outside People, direct grant, revoke and restore |
 | `people-prepare` | The manifest and schemas produce a valid unsigned registry declaration for this commit on a fresh node |
-| `people-link` | Open a read link with no member and no cloud account, start that reader from a snapshot, then refuse its writes and its sync after read returns to members |
-| `people-direct` | Two Submit members write directly, converge on one key, a reader is refused, and a proposal works again after write returns to proposals |
+| `people-link` | Deliver via `grant#any` read on the signed chain (no snapshots); revoke `any` stops later delivery |
+| `people-direct` | Org `write` members append directly, converge on one key, a reader is refused, and reducing to `submit` restores proposals |
 
 Where a recipe is the node owner, it keeps the owner socket. That is schema
 placement, roster reads and writes, share settings, a snapshot, an open

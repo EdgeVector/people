@@ -20,9 +20,10 @@ def public_person(person):
 
 
 def can_submit_received(row):
+    """#1805 selfAccess is `{role}` only; submit/write may propose or write."""
     access = row.get("selfAccess") or {}
-    return (row.get("sharingMode") == "whole_database" and access.get("state") == "active"
-            and access.get("stale") is False)
+    return (row.get("sharingMode") == "whole_database"
+            and access.get("role") in ("submit", "write"))
 
 
 class PeopleApp:
@@ -181,7 +182,10 @@ class PeopleApp:
         config = self.sharing.configuration(database["id"])
         if not any(row["nodeKey"] == node_key and row["state"] == "active" for row in config["members"]):
             raise PeopleError("grant access with a circle or `people grant set` before sealing an invitation")
-        return self.sharing.seal(database["id"], node_key, person["contact_code"], config["revision"],
+        if not isinstance(config.get("entryHash"), str) or not config["entryHash"]:
+            raise PeopleError("grant chain tip is missing; retry after the grant is confirmed")
+        tip = {key: config[key] for key in ("entryHash", "writerSeq") if key in config}
+        return self.sharing.seal(database["id"], node_key, person["contact_code"], tip,
                                  self.node.own_key())
 
     def selected(self, selector, rows=None):

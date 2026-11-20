@@ -5,8 +5,8 @@ from contextlib import closing
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
-from uuid import UUID, uuid4
 
 from node import Connection
 from support import CREDENTIALS_FILE, OperationError, decode_json, require, retry, summary
@@ -18,6 +18,7 @@ SPEC = {"name": "whole-database", "version": 1}
 GROUPS = ("person", "circle", "db", "grant", "request")
 APP = "people"
 RECEIPT = "lastdb-app-install.json"
+HEX32 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def lastdb_source():
@@ -186,31 +187,21 @@ def people(node, *arguments, stdin=None, refusal=None, refusals=(), notices=None
     return decode_json(result.stdout)
 
 
-def expect_setup_member_writes_pending(node, name):
-    """Create a setup on a node with no cloud account. The map stays pending."""
-    require(not (node.home / CREDENTIALS_FILE).exists(), "people_setup_pending_has_no_cloud_account")
-    notices = []
-    created = people(node, "db", "create", name, "--setup", "shared-albums", notices=notices)
+def expect_setup_offline(node, name):
+    """Create a setup on a node with no cloud account. Schemas land locally."""
+    require(not (node.home / CREDENTIALS_FILE).exists(), "people_setup_offline_has_no_cloud_account")
+    created = people(node, "db", "create", name, "--setup", "shared-albums")
     database = created["databaseId"]
     definitions = created["definitions"]
-    try:
-        parsed = str(UUID(database))
-    except ValueError:
-        parsed = ""
-    require(parsed == database and created["name"] == name and created["setupName"] == "shared-albums"
-            and created["version"] == 1 and created["memberWrites"] == "pending"
+    require(HEX32.fullmatch(database) and created["name"] == name and created["setupName"] == "shared-albums"
+            and created["version"] == 1 and "memberWrites" not in created
             and set(definitions) == {"social/Album", "social/AlbumItem", "social/Photo", "social/Comment"}
             and all(isinstance(item, str) and len(item) == 64 for item in definitions.values()),
-            "people_setup_pending_member_writes")
-    sentence = (
-        "The member-write map was not set because this node has no cloud account, "
-        f"so once this node is connected run `people db verify {database} --setup shared-albums --finish`."
-    )
-    require(notices[0].strip() == sentence, "people_setup_pending_notice")
+            "people_setup_offline_schemas")
     shown = people(node, "db", "show", database)
     require(shown["database"]["id"] == database and shown["schemas"] == definitions,
-            "people_setup_pending_schemas")
-    summary(f"Setup `{database}` was created with no cloud account. The member-write map is pending.")
+            "people_setup_offline_shown")
+    summary(f"Setup `{database}` was created with no cloud account; schemas applied locally.")
     return created
 
 
@@ -317,9 +308,7 @@ def open_content_apps(recipient, database):
         # The personal database is the read that omits database. It is not this share.
         personal = read_named(recipient, app, "social/Album", "album-0")
         require("records" not in personal or personal["records"] == [], f"people_content_{app}_personal")
-        # The roster is an owner route. A received database is not this node's share.
-        content(recipient, app, "GET", f"/api/databases/{database}/share/config", status=404)
-        # A received database is read-only on the app write route.
+        # Grant roster is owner/chain derived. A received database is read-only on write.
         content(recipient, app, "POST", "/v1/write", {"mutations": [refused]}, status=403)
     return selections
 
@@ -340,30 +329,16 @@ def read_album(node, selections, database, key, title=None):
                for page in pages)
 
 
-def extend_member_writes(node, database, extra):
-    """Add behaviours for schemas that are not part of the setup file."""
-    current = content(node, "people", "GET", f"/api/databases/{database}/share/config")
-    member_writes = {**(current.get("memberWrites") or {}), **extra}
-    if current.get("memberWrites") == member_writes:
-        return member_writes
-    request_id = str(uuid4())
-    ack = content(node, "people", "PUT", f"/api/databases/{database}/share/config", {
-        "expectedRevision": current["revision"], "requestId": request_id,
-        "members": current.get("members") or [], "memberWrites": member_writes,
-    })
-    require(ack.get("committed") is True and ack.get("requestId") == request_id, "circle_member_writes")
-    return member_writes
+def observe_access(node, database, state, tip=None, *, role="read"):
+    """Wait until selfAccess matches #1805: `{role}` present, or omitted when revoked."""
+    del tip
 
-
-def observe_access(node, database, state, revision=None, *, role="read", write_schemas=None,
-                   member_writes=None):
     def matches(result):
-        access = result["database"]["selfAccess"]
-        return (access["state"] == state and access["confirmedAtMs"] and not access["stale"]
-                and (revision is None or access["revision"] == str(revision))
-                and (state != "active" or access["role"] == role)
-                and (write_schemas is None or access.get("writeSchemas") == write_schemas)
-                and (member_writes is None or access.get("memberWrites") == member_writes))
+        access = (result.get("database") or {}).get("selfAccess")
+        if state == "revoked":
+            return access is None or access.get("role") in (None, "revoked")
+        return isinstance(access, dict) and access.get("role") == role
+
     retry(f"people_recipient_access_{state}", lambda: people(node, "db", "show", database), matches)
 
 

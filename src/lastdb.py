@@ -45,12 +45,11 @@ def error_detail(body):
     return error, error
 
 
-# Share calls on POST /v1/x/databases. The node owns the enrollment wait.
-# The app API keeps the message and maps the owner code: no_cloud_account
-# is HTTP 409 conflict, and both 503s are busy. nightly 734c565e6.
+# Signed-history grant and relay calls on POST /v1/x/databases. The node owns
+# the enrollment wait. no_cloud_account is HTTP 409 conflict; 503s are busy.
 NO_CLOUD_ACCOUNT = "this node has no cloud account"
 DATABASE_ENROLLING = "the database is still enrolling with the cloud; retry"
-SHARE_UNCONFIRMED = "share configuration is not confirmed"
+CHAIN_UNCONFIRMED = "signed grant was not confirmed"
 
 
 def no_cloud_account(error):
@@ -59,26 +58,28 @@ def no_cloud_account(error):
             and (error.code == "no_cloud_account" or error.detail == NO_CLOUD_ACCOUNT))
 
 
-def share_unconfirmed(error):
-    """HTTP 503 after enrollment. The service answer could not be confirmed."""
+def chain_unconfirmed(error):
+    """HTTP 503 after enrollment. The signed chain answer could not be confirmed."""
     return (isinstance(error, LastDBError) and error.status == 503
-            and (error.code == "share_configuration_unconfirmed" or error.detail == SHARE_UNCONFIRMED))
+            and (error.code in ("grant_unconfirmed", "signed_history_unconfirmed",
+                                "share_configuration_unconfirmed")
+                 or error.detail == CHAIN_UNCONFIRMED))
 
 
-def raise_share_refusal(error):
-    """Raise a share refusal. People does not wait.
+def raise_chain_refusal(error):
+    """Raise a signed-history refusal. People does not wait.
 
-    Still enrolling, and any other HTTP 503 except the unconfirmed sentence,
-    tells the user to run the same command again. The unconfirmed sentence
-    is raised unchanged. Every other status, including no cloud account, is
-    raised unchanged. A setup reports no cloud account before calling this.
+    Still enrolling, and any other HTTP 503 except an unconfirmed chain write,
+    tells the user to run the same command again. An unconfirmed sentence is
+    raised unchanged. Every other status, including no cloud account, is raised
+    unchanged.
     """
-    if not isinstance(error, LastDBError) or error.status != 503 or share_unconfirmed(error):
+    if not isinstance(error, LastDBError) or error.status != 503 or chain_unconfirmed(error):
         raise error
     if error.code == "database_enrolling" or error.detail == DATABASE_ENROLLING:
         detail = "the database is still enrolling with the cloud"
     else:
-        detail = error.detail if isinstance(error.detail, str) and error.detail else "the share call failed"
+        detail = error.detail if isinstance(error.detail, str) and error.detail else "the grant call failed"
         detail = detail.rstrip(".")
     raise PeopleError(f"{detail}; run the same command again") from error
 

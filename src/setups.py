@@ -6,18 +6,15 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import re
-import sys
-from uuid import uuid4
+import secrets
 
-from lastdb import LastDBError, PeopleError, no_cloud_account, raise_share_refusal
+from lastdb import LastDBError, PeopleError
 
 
 SHARED_ALBUMS = "shared-albums"
 VERSION = 1
 ALBUM_SCHEMAS = ("Album", "AlbumItem", "Photo", "Comment")
 CATALOG = Path(__file__).resolve().parents[1] / "setups" / "shared-albums-v1"
-MEMBER_WRITES = "member-writes.json"
-WRITE_BEHAVIOURS = {"owner_only", "own_records", "shared"}
 SCHEMA = "people/DatabaseSetup"
 LABEL = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 DEFINITION_ID = re.compile(r"[0-9a-f]{64}\Z")
@@ -53,17 +50,14 @@ class Setups:
             if finish:
                 if database["kind"] != "shareable" or not database.get("name"):
                     raise PeopleError("select a named database you own to finish setup")
-                database, verified, member_writes = self.provision(
+                database, verified = self.provision(
                     database["name"], definitions, existing=database)
             else:
                 verified = self.verify(value, definitions)
-                member_writes = self.member_writes_state(database, read_member_writes())
         else:
-            database, verified, member_writes = self.provision(value, definitions)
-        announce_pending(database, setup, member_writes)
+            database, verified = self.provision(value, definitions)
         return {"databaseId": database["id"], "name": database.get("name"),
-                "setupName": setup, "version": version, "definitions": verified,
-                "memberWrites": member_writes}
+                "setupName": setup, "version": version, "definitions": verified}
 
     def database(self, database_id):
         row = next((row for row in self.sharing.databases() if row["id"] == database_id), None)
@@ -88,32 +82,29 @@ class Setups:
         if database["id"] != database_id or database["kind"] != "shareable":
             raise PeopleError("this setup belongs to an owned database")
         database_id = database["id"]
-        expected = read_member_writes()
         if saved["fields"]["ready"]:
-            verified = self.verify(database_id, definitions)
-            return database, verified, self.member_writes_state(database, expected)
+            return database, self.verify(database_id, definitions)
         installed = self.verify(database_id, definitions, allow_missing=True)
         missing = [request for schema, request in definitions.items() if schema not in installed]
         if missing:
             with ThreadPoolExecutor(max_workers=len(missing)) as pool:
                 list(pool.map(lambda request: self.install(database_id, request), missing))
-        stored = self.ensure_member_writes(database_id, expected)
         verified = self.verify(database_id, definitions)
-        if stored is None:
-            return database, verified, "pending"
         fields = {"database_id": database_id, "ready": True}
         try:
             self.node.write_record(SCHEMA, key, fields, saved)
         except LastDBError as error:
             if error.status != 409 or (self.node.get_record(SCHEMA, key) or {}).get("fields") != fields:
                 raise
-        return database, verified, stored
+        return database, verified
 
     def reserve(self, name, key, existing):
         if existing is None:
             if any(row.get("name") == name for row in self.sharing.databases()):
                 raise PeopleError("that name is already in use; select the owned database by ID to finish setup")
-        fields = {"database_id": existing["id"] if existing else str(uuid4()), "ready": False}
+        # Create Idempotency-Key is the Hex32 database id (64 lowercase hex).
+        fields = {"database_id": existing["id"] if existing else secrets.token_bytes(32).hex(),
+                  "ready": False}
         try:
             written = self.node.write_record(SCHEMA, key, fields, None)
         except LastDBError as error:
@@ -148,102 +139,12 @@ class Setups:
             verified[name] = row["definition_id"]
         return verified
 
-    def ensure_member_writes(self, database_id, expected):
-        """Store the setup map, or None when this node has no cloud account.
-
-        The node waits for enrollment. People does not. No cloud account
-        leaves the map pending and the command succeeds. Still enrolling,
-        and any other HTTP 503, fails. The unconfirmed sentence fails too:
-        the node is enrolled and the service answer could not be confirmed.
-        A later command sends the same body. This call does not sign a
-        second statement, and it does not wait.
-        """
-        if expected is None:
-            return {}
-        current = self.share_config(database_id)
-        if current is None:
-            return None
-        if current.get("memberWrites") == expected:
-            return expected
-        request_id = str(uuid4())
-        config = {
-            "expectedRevision": current["revision"],
-            "requestId": request_id,
-            "members": current.get("members") or [],
-            "memberWrites": expected,
-        }
-        try:
-            ack = self.node.databases("set_share_config", database=database_id, config=config)
-        except LastDBError as error:
-            if no_cloud_account(error):
-                return None
-            raise_share_refusal(error)
-            raise
-        if (ack.get("databaseId") != database_id or ack.get("requestId") != request_id
-                or ack.get("committed") is not True):
-            raise PeopleError("LastDB returned a mismatched sharing acknowledgement")
-        return expected
-
-    def member_writes_state(self, database, expected):
-        """The stored map, or pending when this node has no cloud account."""
-        if expected is None:
-            return {}
-        if database.get("kind") != "shareable":
-            stored = (database.get("selfAccess") or {}).get("memberWrites")
-            return stored if isinstance(stored, dict) else "pending"
-        current = self.share_config(database["id"])
-        if current is None:
-            return "pending"
-        stored = current.get("memberWrites")
-        if stored != expected:
-            raise PeopleError("the member-write map does not match the setup")
-        return stored if isinstance(stored, dict) else {}
-
-    def share_config(self, database_id):
-        """The share configuration, or None when this node has no cloud account."""
-        try:
-            return self.node.databases("share_config", database=database_id)
-        except LastDBError as error:
-            if no_cloud_account(error):
-                return None
-            raise_share_refusal(error)
-            raise
-
-
-def announce_pending(database, setup, member_writes):
-    """One sentence on stderr when this node owns the database and has no cloud account."""
-    if member_writes != "pending" or database.get("kind") != "shareable":
-        return
-    database_id = database["id"]
-    print(
-        "The member-write map was not set because this node has no cloud account, "
-        f"so once this node is connected run `people db verify {database_id} --setup {setup} --finish`.",
-        file=sys.stderr,
-    )
-
-
-def read_member_writes(catalog=CATALOG):
-    """The setup's map, or None when the setup has no member-writes file."""
-    path = catalog / MEMBER_WRITES
-    if not path.is_file():
-        return None
-    try:
-        value = json.loads(path.read_text())
-    except json.JSONDecodeError as error:
-        raise PeopleError("the setup member-write map is invalid") from error
-    if (not isinstance(value, dict) or any(
-            not isinstance(name, str) or behaviour not in WRITE_BEHAVIOURS
-            for name, behaviour in value.items())):
-        raise PeopleError("the setup member-write map is invalid")
-    return value
-
 
 def declaration(database_id, request):
     """The declare_schema body. Both sockets send the catalog app_id.
 
-    The catalog name is the stored name, such as social/Album. People does
-    not list that name in access.write. The databases extension is the grant
-    for this call.
+    The catalog name is the stored name, such as social/Album. Access comes
+    from the signed chain grant role, not a database-wide write map.
     """
     body = {"database": database_id, "app_id": request["app_id"], "schema": request["schema"]}
     if "retention" in request:

@@ -8,7 +8,12 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
   the command grammar, and `src/commands.py` maps each command to an
   operation. Database and sharing calls use `POST /v1/x/databases`. Record
   calls use `POST /v1/read` and `POST /v1/write`.
-- `ci/` holds the DEV sharing recipes run by `dev-sharing.yml`.
+- `ci/` holds the DEV sharing recipes run by `dev-sharing.yml`. Database and
+  stream/device ids are Hex32 (64 lowercase hex), not UUID. DEV sharing takes
+  a `RELAY_URL` (ExeMem DEV origin for `/relay/v1`) and defaults
+  `lastdb_source_sha` to the #1805 merge on LastDB main until a post-#1805
+  nightly is selected. `selfAccess` is `{role}` only. `relays` is read-only;
+  nodes also get `LASTDB_RELAY_URL`. Public `any` cannot be revoked.
 - `lastdb-app.json` is the app manifest and the source of People's private
   schema definitions. Each schema object uses a local name such as `Person`.
   The installer stores that name as `people/<Name>` from the manifest
@@ -16,9 +21,9 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
   block lists the nine full names for read and for write.
 - `setups/shared-albums-v1/` holds the schema definitions of the
   `shared-albums` version 1 setup. This is the only copy of the
-  definitions. Shared databases are whole-database shares; member write
-  behaviour comes from the publisher's `memberWrites` map, not from a
-  LastDB share-spec catalog.
+  definitions. Shared databases are whole-database shares. Member access
+  is the per-member chain role (`read`, `submit`, `write`, or `revoked`)
+  from publisher-signed grant entries. There is no database-wide write map.
 
 ## Rules
 
@@ -58,9 +63,13 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
   `@lastdb/app-sdk`. When a command's name, flags or JSON output change,
   change `client/` in the same commit; `ci/people_sdk.mjs` exercises it.
   Keep `client/package.json`'s version equal to `lastdb-app.json`'s.
-- Preserve whole-database sharing: two logs, the signed per-database roster,
-  schema write grants, and the publisher approving each mutation. Read
-  [the sharing design](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/shared-database-mutation-logs.md#requirements-to-preserve)
+- Preserve whole-database sharing on the signed-history model: publisher-signed
+  grant/revoke chain entries, signed heads for comparison only, and relay
+  bootstrap from a publisher-signed `relays` entry. People must never treat a
+  People-only grant as authoritative. Read
+  [cloud-api.md](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/cloud-api.md)
+  and
+  [relay-protocol.md](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/relay-protocol.md)
   before changing that path.
 - LastDB access is by key and batched. No scan, no loop of one call per record.
 - No migration code and no readers for old formats.

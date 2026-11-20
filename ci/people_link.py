@@ -1,33 +1,31 @@
-"""Prove open-link reading and a snapshot start against the DEV cloud.
+"""Prove Deliver (grant#any read) on the signed-history model.
 
-People creates the database. The node sets read, publishes the snapshot, mints
-the link, and accepts it. People has no command for those steps. The reader
-has no cloud account and no member entry.
+People creates the database. The owner grants public read on the chain, mints
+an open link for key delivery, and the reader accepts without a member grant.
+No snapshots. LastDB #1805 refuses revoke of `any`, so this recipe proves the
+open path and that LastDB rejects closing via revoke-any.
 """
 
 import os
-import time
-import uuid
 
 from people_app import install, people, write_owned
 from share_node import (
-    accept_link, await_defaults, connect, declare, keyed, mint_link, no_cloud_account, note,
-    proposal, publish_snapshot, put_settings, refuse_proposal, report, snapshot_story, until,
-    write_member,
+    accept_link, await_empty_grants, connect, declare, ensure_relay, grant_public_read,
+    hex32_id, keyed, mint_link, no_cloud_account, note, proposal, refuse_proposal, report,
+    revoke_public_read, until, write_member,
 )
-from support import OperationError, require, run_operation
+from support import require, run_operation
 
 
-BEFORE = "Before the snapshot"
-AFTER = "After the snapshot"
-CLOSED = "After read returned to members"
+BEFORE = "Before public read"
+AFTER = "After public read"
 
 
 def create(publisher, name):
     created = people(publisher, "db", "create", name)
-    database = str(uuid.UUID(created["id"]))
-    require(database == created["id"] and created.get("sharingMode") == "whole_database", "link_database")
-    report("Owned DEV mutation log %s for %s." % (database, name))
+    database = hex32_id(created["id"], "link_database")
+    require(created.get("sharingMode") == "whole_database", "link_database_mode")
+    report("Owned DEV database %s for Deliver %s." % (database, name))
     return database
 
 
@@ -40,38 +38,15 @@ def wait_notes(node, database, pairs, stage):
     until(stage, lambda: keyed(node, database, keys), done)
 
 
-def prove_reader(reader, database, definition, requested):
+def prove_reader(reader, database, definition):
     wait_notes(reader, database, (("before", BEFORE), ("after", AFTER)), "link_reader_records")
-    report("Reader snapshot: %s." % snapshot_story(reader.home, database, requested))
+    report("Reader accepted grant#any and replayed the signed log from birth.")
     require(write_member(reader, database, note("Reader write", "reader-write")) == "refused", "link_reader_write")
     require(keyed(reader, database, ["reader-write"])[0] is None, "link_reader_write_kept")
-    refuse_proposal(reader, database, proposal(definition, "reader-proposal", "Reader proposal"), "link_reader_proposal")
+    refuse_proposal(reader, database, proposal(definition, "reader-proposal", "Reader proposal"),
+                    "link_reader_proposal")
     require(keyed(reader, database, ["reader-proposal"])[0] is None, "link_reader_proposal_kept")
-    report("The reader was refused on the write route and on proposal submission, with no local record kept.")
-
-
-def hold_closed(publisher, reader, database):
-    write_owned(publisher, database, note(CLOSED, "closed"))
-    require(keyed(publisher, database, ["closed"])[0]["fields"].get("text") == CLOSED, "link_closed_write")
-    for _ in range(12):
-        before, after, closed = keyed(reader, database, ["before", "after", "closed"])
-        require(before and before["fields"].get("text") == BEFORE, "link_copy_lost")
-        require(after and after["fields"].get("text") == AFTER, "link_copy_lost")
-        require(closed is None, "link_read_not_closed")
-        time.sleep(1)
-    report("The reader kept both earlier records and did not receive the record written after read "
-           "returned to members. The node does not record that refusal for a received database.")
-
-
-def restore(publisher, database, opened, failed):
-    if not opened:
-        return
-    try:
-        put_settings(publisher, database, read="members")
-    except OperationError:
-        report("Could not return read to members.")
-        if not failed:
-            raise
+    report("The reader was refused on append and proposal paths.")
 
 
 def operation(programs, root, publisher, recipient, api_key):
@@ -82,27 +57,17 @@ def operation(programs, root, publisher, recipient, api_key):
     definition = declare(publisher, database)
     write_owned(publisher, database, note(BEFORE, "before"))
     connect(programs, publisher, api_key)
-    await_defaults(publisher, database)
-    opened = False
-    failed = False
-    try:
-        put_settings(publisher, database, read="anyone")
-        opened = True
-        requested = publish_snapshot(publisher, database)
-        report("Publisher snapshot through %s." % requested)
-        write_owned(publisher, database, note(AFTER, "after"))
-        no_cloud_account(recipient)
-        accepted = accept_link(recipient, mint_link(publisher, database), "open")
-        require(accepted.get("id") == database and accepted.get("access") == "reader", "link_accept_database")
-        prove_reader(recipient, database, definition, requested)
-        put_settings(publisher, database, read="members")
-        opened = False
-        hold_closed(publisher, recipient, database)
-    except Exception:
-        failed = True
-        raise
-    finally:
-        restore(publisher, database, opened, failed)
+    await_empty_grants(publisher, database)
+    ensure_relay(publisher, database)
+    grant_public_read(publisher, database)
+    write_owned(publisher, database, note(AFTER, "after"))
+    no_cloud_account(recipient)
+    accepted = accept_link(recipient, mint_link(publisher, database), "open")
+    require(accepted.get("id") == database, "link_accept_database")
+    prove_reader(recipient, database, definition)
+    # #1805: public read cannot be revoked. Prove the refusal; keep grant#any.
+    revoke_public_read(publisher, database)
+    report("LastDB refused revoke of grant#any; Deliver stays open on the chain.")
 
 
 if __name__ == "__main__":

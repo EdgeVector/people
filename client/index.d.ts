@@ -19,7 +19,7 @@ export class PeopleError extends Error {
  * the app by the schemas it declared, not by database.
  */
 export interface PeopleDatabase {
-  /** Stable database id for the `database` field of `POST /v1/read` and `POST /v1/write`. */
+  /** Hex32 database id (64 lowercase hex) for the `database` field of `POST /v1/read` and `POST /v1/write`. */
   id: string;
   name?: string | null;
   kind?: string | null;
@@ -31,8 +31,11 @@ export interface PeopleDatabase {
 
 /** A sealed invitation for the caller to hand to the verified recipient. */
 export interface PeopleInvitation {
+  /** Hex32 database id (64 lowercase hex). */
   databaseId: string;
-  revision: string;
+  /** Tip of the publisher grant chain when the invitation was sealed. */
+  entryHash: string;
+  writerSeq?: number;
   publisher: string;
   invitation: string;
 }
@@ -53,16 +56,10 @@ export interface PeopleDatabaseSetup {
   version: number;
   /** Verified installed definition IDs keyed by canonical schema name. */
   definitions: Record<string, string>;
-  /**
-   * The stored map when this command confirmed the share configuration.
-   * `pending` when this node has no cloud account. Create still places the
-   * schemas in that case. Any HTTP 503 fails the command.
-   */
-  memberWrites: 'pending' | Record<string, 'owner_only' | 'own_records' | 'shared'>;
 }
 
 type PeopleGrantScope =
-  { writeSchemas: string[] | 'all'; preset?: never }
+  { writeSchemas: string[] | 'all' | 'write'; preset?: never }
   | { preset: 'viewer' | 'commenter' | 'album-organizer'; writeSchemas?: never };
 
 export type PeopleSharingChange =
@@ -82,7 +79,8 @@ export interface PeopleSharingStatus {
   requestId: string;
   databaseId: string;
   status: 'awaitingApproval' | 'pending' | 'confirmed' | 'needsReview' | 'declined';
-  revision?: string;
+  entryHash?: string;
+  writerSeq?: number;
   error?: string;
 }
 
@@ -107,7 +105,7 @@ export interface PeopleClient {
   sealInvitation(databaseId: string, nodeKey: string): Promise<PeopleInvitation>;
   /** Accept using the independently verified publisher key. */
   acceptInvitation(invitation: PeopleInvitation, publisherKey: string, name?: string): Promise<PeopleDatabase>;
-  /** Revoke a person's grant and return the applied revision. */
+  /** Revoke a person's grant and return the signed chain entry hash. */
   revokeAccess(database: string, nodeKey: string): Promise<string>;
 }
 

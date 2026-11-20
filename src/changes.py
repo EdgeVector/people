@@ -27,14 +27,20 @@ def new_circle_id(name, taken):
 
 
 def parse_scope(text):
-    """Read `read`, `all`, or a comma-separated list of canonical schema names."""
+    """Read `read`, `write`, `all`, or a comma-separated list of schema names.
+
+    `write` is the Org chain role (direct member appends). `all` and schema
+    names map to the Share `submit` role. Circles still choose the app map.
+    """
     if text == "read":
         return []
+    if text == "write":
+        return "write"
     if text == "all":
         return "all"
     names = sorted({name.strip() for name in text.split(",") if name.strip()})
     if not names:
-        raise PeopleError("write a scope as read, all, or schema names such as social/Comment")
+        raise PeopleError("write a scope as read, write, all, or schema names such as social/Comment")
     return names
 
 
@@ -91,7 +97,7 @@ def circle_remove(app, selector, *, review=None, apply=False, token=None, defer=
 
 
 def grant_revoke(app, database, person, *, apply=False):
-    """Revoke one person on an owned whole-database share."""
+    """Revoke one person on an owned whole-database share via a signed chain entry."""
     database = app.sharing.owned(database)
     key = app.resolve_people([person], known=False)[0]
     if not apply:
@@ -101,10 +107,10 @@ def grant_revoke(app, database, person, *, apply=False):
         if member is None:
             raise PeopleError("the recipient has never been granted access to this database")
         return {"applied": False, "databaseId": database["id"], "name": database["name"], "nodeKey": key,
-                "before": member, "after": {**member, "state": "revoked"}}
-    revision = app.sharing.update_member(database["id"], key, False)
-    return {"applied": True, "databaseId": database["id"], "revision": revision, "nodeKey": key,
-            "state": "revoked"}
+                "before": member, "after": {**member, "state": "revoked", "role": "revoked"}}
+    receipt = app.sharing.update_member(database["id"], key, False)
+    return {"applied": True, "databaseId": database["id"], "entryHash": receipt.get("entryHash"),
+            "writerSeq": receipt.get("writerSeq"), "nodeKey": key, "state": "revoked"}
 
 
 def grant_direct(app, operation, database, person, scope, *, review=None, apply=False, token=None):
@@ -139,8 +145,9 @@ def invite(app, database, person, *, name=None, contact=None, out=None):
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         os.fchmod(descriptor, 0o600)
         json.dump(receipt, stream, sort_keys=True)
-    return {"databaseId": receipt["databaseId"], "revision": receipt["revision"],
-            "publisher": receipt["publisher"], "out": str(out)}
+    kept = {key: receipt[key] for key in ("databaseId", "entryHash", "writerSeq", "publisher")
+            if key in receipt}
+    return {**kept, "out": str(out)}
 
 
 def seal(app, database, person, name, contact):
@@ -152,3 +159,10 @@ def seal(app, database, person, name, contact):
     else:
         key = app.resolve_people([person])[0]
     return app.seal(database, key)
+
+
+def grant_role(scope):
+    """Map a People write scope to the signed-history chain role."""
+    if scope == "write":
+        return "write"
+    return "submit" if scope else "read"

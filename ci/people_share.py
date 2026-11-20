@@ -10,7 +10,7 @@ from people_app import (SETUP, expect_setup_offline, install, observe_access,
                         open_content_apps, pick, read_album, read_records, report_content_flow, sdk,
                         people, write_owned)
 from share_node import ensure_relay, hex32_id
-from support import require, retry, run_operation, summary
+from support import OperationError, require, retry, run_operation, summary
 
 
 SCOPE = {"name": "whole-database", "version": 1}
@@ -47,14 +47,28 @@ def roster(node, database):
 
 
 def expect_roster(node, database, member=None):
-    config = roster(node, database)
     expected = [member] if member else []
-    actual = config.get("members")
-    if actual != expected:
-        summary("people_applied_grants expected=%s actual=%s tip=%s"
-                % (expected, actual, {k: config.get(k) for k in ("entryHash", "writerSeq")}))
-    require(actual == expected, "people_applied_grants")
-    return config
+
+    def load():
+        return roster(node, database)
+
+    def matches(config):
+        return config.get("members") == expected
+
+    try:
+        return retry("people_applied_grants", load, matches)
+    except OperationError as error:
+        config = roster(node, database)
+        actual = config.get("members")
+        tip = {k: config.get(k) for k in ("entryHash", "writerSeq", "status", "httpStatus")}
+        detail = "expected=%s actual=%s tip=%s" % (expected, actual, tip)
+        summary("people_applied_grants %s" % detail)
+        raise OperationError(
+            "people_applied_grants",
+            cli_refusal=error.cli_refusal,
+            socket_refusal=error.socket_refusal,
+            command_output=(detail, ""),
+        ) from error
 
 
 def grant_reader(publisher, database, person, reader_key):
@@ -125,6 +139,8 @@ def transfer(programs, root, publisher, recipient, api_key):
     publisher.keep_saved_credentials = True
     publisher.start()
     ensure_relay(publisher, database)
+    retry("people_share_cloud_ready", lambda: roster(publisher, database),
+          lambda config: config.get("members") == [] and config.get("status") != "unavailable")
     finish_shared_albums(publisher, database)
     verify_shared_albums_setup(publisher, name + "-albums")
     contact = root / "reader.contact"

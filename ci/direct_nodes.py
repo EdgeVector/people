@@ -57,7 +57,7 @@ def sync_text(node, database):
     cloud = cloud_sync(owner_status(node))
     if cloud is None:
         return "sync=unread"
-    err = clip_public(cloud.get("last_error"), 12) if isinstance(cloud.get("last_error"), str) else "-"
+    err = clip_public(cloud.get("last_error"), 120) if isinstance(cloud.get("last_error"), str) else "-"
     text = "sync=%s/%s/%s err=%s n=%s" % (
         bit(cloud.get("connected")), bit(cloud.get("captures_accepted")),
         bit(cloud.get("payment_hold")), err, count_of(cloud.get("databases")))

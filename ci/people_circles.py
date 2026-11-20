@@ -146,13 +146,13 @@ def _body(raw):
     if isinstance(parsed, dict):
         error = parsed.get("error")
         if isinstance(error, dict):
-            return clip_public("%s %s" % (error.get("code") or "-", error.get("message") or "-"), 80)
+            return clip_public("%s %s" % (error.get("code") or "-", error.get("message") or "-"), 200)
         if isinstance(error, str):
             message = parsed.get("message")
             text = error if not isinstance(message, str) else "%s %s" % (error, message)
-            return clip_public(text, 80)
+            return clip_public(text, 200)
     text = raw.decode("utf-8", "replace").split("\n", 1)[0]
-    return clip_public(text, 80)
+    return clip_public(text, 200)
 
 
 def transfer(programs, root, publisher, recipient, api_key):
@@ -194,10 +194,13 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
     people(publisher, "person", "add", "Ana", "--node-key", reader, "--contact", str(contact), refusals=REFUSALS)
     wait_cloud("circle_cloud_ready", publisher, database)
     placed = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
+    setup_schemas = {"social/Album", "social/AlbumItem", "social/Photo", "social/Comment"}
+    got = set(placed.get("definitions") or {})
     check(placed["databaseId"] == database and "memberWrites" not in placed
-          and set(placed["definitions"]) >= {ALBUM, COMMENT}, "circle_setup_finish",
+          and got == setup_schemas, "circle_setup_finish",
           saw("setup", id_match=placed.get("databaseId") == database,
-              schemas=len(placed.get("definitions") or {})))
+              schemas=len(got), missing=len(setup_schemas - got),
+              extra=len(got - setup_schemas)))
     definitions.update(placed["definitions"])
     shown = set(people(publisher, "db", "show", database)["schemas"])
     check(set(definitions).issubset(shown), "circle_schema_catalog_missing",

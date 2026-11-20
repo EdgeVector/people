@@ -6,10 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import re
-import sys
 from uuid import uuid4
 
-from lastdb import LastDBError, PeopleError, no_cloud_account, raise_share_refusal
+from lastdb import LastDBError, PeopleError
 
 
 SHARED_ALBUMS = "shared-albums"
@@ -97,10 +96,10 @@ class Setups:
         if missing:
             with ThreadPoolExecutor(max_workers=len(missing)) as pool:
                 list(pool.map(lambda request: self.install(database_id, request), missing))
-        stored = self.ensure_member_writes(database_id, expected)
+        # memberWrites is People/setup schema policy from the catalog, not chain
+        # access authority and not an ExeMem share-settings side channel.
+        stored = expected if expected is not None else {}
         verified = self.verify(database_id, definitions)
-        if stored is None:
-            return database, verified, "pending"
         fields = {"database_id": database_id, "ready": True}
         try:
             self.node.write_record(SCHEMA, key, fields, saved)
@@ -148,78 +147,19 @@ class Setups:
             verified[name] = row["definition_id"]
         return verified
 
-    def ensure_member_writes(self, database_id, expected):
-        """Store the setup map, or None when this node has no cloud account.
-
-        The node waits for enrollment. People does not. No cloud account
-        leaves the map pending and the command succeeds. Still enrolling,
-        and any other HTTP 503, fails. The unconfirmed sentence fails too:
-        the node is enrolled and the service answer could not be confirmed.
-        A later command sends the same body. This call does not sign a
-        second statement, and it does not wait.
-        """
-        if expected is None:
-            return {}
-        current = self.share_config(database_id)
-        if current is None:
-            return None
-        if current.get("memberWrites") == expected:
-            return expected
-        request_id = str(uuid4())
-        config = {
-            "expectedRevision": current["revision"],
-            "requestId": request_id,
-            "members": current.get("members") or [],
-            "memberWrites": expected,
-        }
-        try:
-            ack = self.node.databases("set_share_config", database=database_id, config=config)
-        except LastDBError as error:
-            if no_cloud_account(error):
-                return None
-            raise_share_refusal(error)
-            raise
-        if (ack.get("databaseId") != database_id or ack.get("requestId") != request_id
-                or ack.get("committed") is not True):
-            raise PeopleError("LastDB returned a mismatched sharing acknowledgement")
-        return expected
-
     def member_writes_state(self, database, expected):
-        """The stored map, or pending when this node has no cloud account."""
+        """Catalog setup policy. Not chain access; not ExeMem share-settings."""
         if expected is None:
             return {}
         if database.get("kind") != "shareable":
             stored = (database.get("selfAccess") or {}).get("memberWrites")
             return stored if isinstance(stored, dict) else "pending"
-        current = self.share_config(database["id"])
-        if current is None:
-            return "pending"
-        stored = current.get("memberWrites")
-        if stored != expected:
-            raise PeopleError("the member-write map does not match the setup")
-        return stored if isinstance(stored, dict) else {}
-
-    def share_config(self, database_id):
-        """The share configuration, or None when this node has no cloud account."""
-        try:
-            return self.node.databases("share_config", database=database_id)
-        except LastDBError as error:
-            if no_cloud_account(error):
-                return None
-            raise_share_refusal(error)
-            raise
+        return expected
 
 
 def announce_pending(database, setup, member_writes):
-    """One sentence on stderr when this node owns the database and has no cloud account."""
-    if member_writes != "pending" or database.get("kind") != "shareable":
-        return
-    database_id = database["id"]
-    print(
-        "The member-write map was not set because this node has no cloud account, "
-        f"so once this node is connected run `people db verify {database_id} --setup {setup} --finish`.",
-        file=sys.stderr,
-    )
+    """No cloud-dependent memberWrites side channel remains."""
+    del database, setup, member_writes
 
 
 def read_member_writes(catalog=CATALOG):

@@ -1,8 +1,9 @@
-"""Prove open-link reading and a snapshot start against the DEV cloud.
+"""Prove Deliver (grant#any read) on the signed-history model.
 
-People creates the database. The node sets read, publishes the snapshot, mints
-the link, and accepts it. People has no command for those steps. The reader
-has no cloud account and no member entry.
+People creates the database. The owner grants public read on the chain, mints
+an open link for key delivery, and the reader accepts without a member grant.
+No snapshots. Closing Deliver revokes grant#any; the reader's next sync must
+not receive later records, and appends stay refused.
 """
 
 import os
@@ -11,23 +12,23 @@ import uuid
 
 from people_app import install, people, write_owned
 from share_node import (
-    accept_link, await_defaults, connect, declare, keyed, mint_link, no_cloud_account, note,
-    proposal, publish_snapshot, put_settings, refuse_proposal, report, snapshot_story, until,
-    write_member,
+    accept_link, await_empty_grants, bootstrap_relay, connect, declare, grant_public_read,
+    keyed, mint_link, no_cloud_account, note, proposal, refuse_proposal, report,
+    revoke_public_read, until, write_member,
 )
 from support import OperationError, require, run_operation
 
 
-BEFORE = "Before the snapshot"
-AFTER = "After the snapshot"
-CLOSED = "After read returned to members"
+BEFORE = "Before public read"
+AFTER = "After public read"
+CLOSED = "After grant#any revoked"
 
 
 def create(publisher, name):
     created = people(publisher, "db", "create", name)
     database = str(uuid.UUID(created["id"]))
     require(database == created["id"] and created.get("sharingMode") == "whole_database", "link_database")
-    report("Owned DEV mutation log %s for %s." % (database, name))
+    report("Owned DEV database %s for Deliver %s." % (database, name))
     return database
 
 
@@ -40,14 +41,15 @@ def wait_notes(node, database, pairs, stage):
     until(stage, lambda: keyed(node, database, keys), done)
 
 
-def prove_reader(reader, database, definition, requested):
+def prove_reader(reader, database, definition):
     wait_notes(reader, database, (("before", BEFORE), ("after", AFTER)), "link_reader_records")
-    report("Reader snapshot: %s." % snapshot_story(reader.home, database, requested))
+    report("Reader accepted grant#any and replayed the signed log from birth.")
     require(write_member(reader, database, note("Reader write", "reader-write")) == "refused", "link_reader_write")
     require(keyed(reader, database, ["reader-write"])[0] is None, "link_reader_write_kept")
-    refuse_proposal(reader, database, proposal(definition, "reader-proposal", "Reader proposal"), "link_reader_proposal")
+    refuse_proposal(reader, database, proposal(definition, "reader-proposal", "Reader proposal"),
+                    "link_reader_proposal")
     require(keyed(reader, database, ["reader-proposal"])[0] is None, "link_reader_proposal_kept")
-    report("The reader was refused on the write route and on proposal submission, with no local record kept.")
+    report("The reader was refused on append and proposal paths.")
 
 
 def hold_closed(publisher, reader, database):
@@ -59,17 +61,16 @@ def hold_closed(publisher, reader, database):
         require(after and after["fields"].get("text") == AFTER, "link_copy_lost")
         require(closed is None, "link_read_not_closed")
         time.sleep(1)
-    report("The reader kept both earlier records and did not receive the record written after read "
-           "returned to members. The node does not record that refusal for a received database.")
+    report("After revoking grant#any the reader kept earlier records and did not receive later ones.")
 
 
 def restore(publisher, database, opened, failed):
     if not opened:
         return
     try:
-        put_settings(publisher, database, read="members")
+        revoke_public_read(publisher, database)
     except OperationError:
-        report("Could not return read to members.")
+        report("Could not revoke grant#any.")
         if not failed:
             raise
 
@@ -82,20 +83,19 @@ def operation(programs, root, publisher, recipient, api_key):
     definition = declare(publisher, database)
     write_owned(publisher, database, note(BEFORE, "before"))
     connect(programs, publisher, api_key)
-    await_defaults(publisher, database)
+    await_empty_grants(publisher, database)
+    bootstrap_relay(publisher, database)
     opened = False
     failed = False
     try:
-        put_settings(publisher, database, read="anyone")
+        grant_public_read(publisher, database)
         opened = True
-        requested = publish_snapshot(publisher, database)
-        report("Publisher snapshot through %s." % requested)
         write_owned(publisher, database, note(AFTER, "after"))
         no_cloud_account(recipient)
         accepted = accept_link(recipient, mint_link(publisher, database), "open")
-        require(accepted.get("id") == database and accepted.get("access") == "reader", "link_accept_database")
-        prove_reader(recipient, database, definition, requested)
-        put_settings(publisher, database, read="members")
+        require(accepted.get("id") == database, "link_accept_database")
+        prove_reader(recipient, database, definition)
+        revoke_public_read(publisher, database)
         opened = False
         hold_closed(publisher, recipient, database)
     except Exception:

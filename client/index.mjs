@@ -122,14 +122,14 @@ export function peopleClient({ dataDir, peoplePath = 'people', lastdbPath }) {
       return database;
     },
 
-    /** Revoke a person's grant and return the applied revision. */
+    /** Revoke a person's grant and return the signed chain entry hash. */
     async revokeAccess(database, nodeKey) {
       const result = await run(['grant', 'revoke'], ['--apply', '--', database, nodeKey]);
-      if (!isObject(result) || typeof result.revision !== 'string' || result.state !== 'revoked'
+      if (!isObject(result) || typeof result.entryHash !== 'string' || result.state !== 'revoked'
         || result.nodeKey !== nodeKey || typeof result.databaseId !== 'string') {
         throw invalid('People returned an invalid revoke receipt');
       }
-      return result.revision;
+      return result.entryHash;
     },
   };
 }
@@ -142,13 +142,20 @@ function parseDatabase(value) {
 
 function parseSharingStatus(value, expectedId) {
   if (isObject(value)) {
-    const { requestId, databaseId, status, revision, error } = value;
+    const { requestId, databaseId, status, entryHash, writerSeq, revision, error } = value;
+    const tip = entryHash !== undefined ? entryHash : revision;
     if (requestId === expectedId && typeof databaseId === 'string' && STATUSES.includes(status)
-      && (revision === undefined || typeof revision === 'string')
+      && (tip === undefined || typeof tip === 'string')
+      && (writerSeq === undefined || typeof writerSeq === 'number')
       && (error === undefined || typeof error === 'string')
-      && (status !== 'confirmed' || typeof revision === 'string')) {
-      return { requestId, databaseId, status, ...(revision === undefined ? {} : { revision }),
-        ...(error === undefined ? {} : { error }) };
+      && (status !== 'confirmed' || typeof tip === 'string')) {
+      return {
+        requestId, databaseId, status,
+        ...(entryHash === undefined ? {} : { entryHash }),
+        ...(writerSeq === undefined ? {} : { writerSeq }),
+        ...(revision === undefined ? {} : { revision }),
+        ...(error === undefined ? {} : { error }),
+      };
     }
   }
   throw invalid('People returned invalid sharing status');
@@ -156,10 +163,16 @@ function parseSharingStatus(value, expectedId) {
 
 function parseInvitation(result) {
   if (isObject(result)) {
-    const { databaseId, revision, publisher, invitation } = result;
-    if (typeof databaseId === 'string' && typeof revision === 'string'
+    const { databaseId, entryHash, writerSeq, revision, publisher, invitation } = result;
+    const tipOk = typeof entryHash === 'string' || typeof revision === 'string';
+    if (typeof databaseId === 'string' && tipOk
       && typeof publisher === 'string' && typeof invitation === 'string' && invitation.length > 0) {
-      return { databaseId, revision, publisher, invitation };
+      return {
+        databaseId, publisher, invitation,
+        ...(entryHash === undefined ? {} : { entryHash }),
+        ...(writerSeq === undefined ? {} : { writerSeq }),
+        ...(revision === undefined ? {} : { revision }),
+      };
     }
   }
   throw invalid('People returned an invalid invitation receipt');

@@ -17,8 +17,8 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
 - `setups/shared-albums-v1/` holds the schema definitions of the
   `shared-albums` version 1 setup. This is the only copy of the
   definitions. Shared databases are whole-database shares; member write
-  behaviour comes from the publisher's `memberWrites` map, not from a
-  LastDB share-spec catalog.
+  behaviour comes from the publisher's setup `memberWrites` catalog map
+  (schema policy, not chain access), not from a LastDB share-spec catalog.
 
 ## Rules
 
@@ -58,9 +58,13 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
   `@lastdb/app-sdk`. When a command's name, flags or JSON output change,
   change `client/` in the same commit; `ci/people_sdk.mjs` exercises it.
   Keep `client/package.json`'s version equal to `lastdb-app.json`'s.
-- Preserve whole-database sharing: two logs, the signed per-database roster,
-  schema write grants, and the publisher approving each mutation. Read
-  [the sharing design](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/shared-database-mutation-logs.md#requirements-to-preserve)
+- Preserve whole-database sharing on the signed-history model: publisher-signed
+  grant/revoke chain entries, signed heads for comparison only, and relay
+  bootstrap from a publisher-signed `relays` entry. People must never treat a
+  People-only grant as authoritative. Read
+  [cloud-api.md](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/cloud-api.md)
+  and
+  [relay-protocol.md](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/relay-protocol.md)
   before changing that path.
 - LastDB access is by key and batched. No scan, no loop of one call per record.
 - No migration code and no readers for old formats.

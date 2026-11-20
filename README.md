@@ -22,8 +22,9 @@ lists the extension `databases`. The JSON body carries `action`:
 | --- | --- |
 | `list`, `create`, `accept` | List databases, create one, accept an invitation |
 | `schemas`, `declare_schema` | Read a database's schemas, place a setup schema |
-| `share_config`, `set_share_config` | Read and update the roster |
-| `invite` | Seal an invitation |
+| `grant`, `revoke`, `grants` | Append or fold publisher-signed chain grants (authority) |
+| `heads`, `relays`, `bootstrap_relay` | Signed heads for comparison; relay URL bootstrap |
+| `invite` | Seal an invitation for a person who already has a chain grant |
 | `submit`, `submission_status` | A content app submits one proposal and reads its state. People's own commands do not call these |
 
 `declare_schema` sends `app_id` from the catalog on the app socket and on the
@@ -138,10 +139,10 @@ people grant revoke family Cal --apply
 people grant restore family Cal --write read --apply
 ```
 
-`invite` produces JSON with `databaseId`, `revision`, `publisher`, and
-`invitation`. With `--out` it writes that receipt to a file only you can read.
-Without it the receipt goes to standard output. Hand the sealed receipt to
-the recipient. Keep it out of logs.
+`invite` produces JSON with `databaseId`, `entryHash`, `writerSeq`,
+`publisher`, and `invitation`. With `--out` it writes that receipt to a file
+only you can read. Without it the receipt goes to standard output. Hand the
+sealed receipt to the recipient. Keep it out of logs.
 The recipient accepts it with the publisher's independently verified key:
 
 ```sh
@@ -149,8 +150,9 @@ people db accept ana-invitation.json --publisher "$trusted_publisher_key" --name
 ```
 
 `db accept` returns LastDB's received database metadata. The local LastDB
-syncs its records from ExeMem. `db show` reports the recipient's cloud access
-and downloaded record readiness separately.
+bootstraps the first relay URL from the publisher-signed `relays` entry and
+replays the signed log. `db show` reports folded chain grants and signed
+heads for comparison.
 
 Compatible schema upgrades keep a grant in place. The publisher still checks
 the specific current definition and the record rules for each write. On a
@@ -245,19 +247,26 @@ the `database` field. An app that
 wants to show the sender's own change before the publisher accepts it uses
 `"action": "submission_status"` and shows that pending state.
 `POST /v1/write` to a received database is refused: the database is read only.
-[How sharing works](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/shared-database-mutation-logs.md)
+[How sharing works](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/cloud-api.md)
 
-People changes must preserve the two logs, the signed per-database roster and
-schema grants, and the publisher's authority to approve each mutation.
-[Requirements to preserve](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/shared-database-mutation-logs.md#requirements-to-preserve)
+People turns Share, Deliver and Org into publisher-signed grant and revoke
+chain entries through LastDB. People may carry signed heads for comparison
+only and bootstraps the first relay URL from a publisher-signed `relays`
+entry. A grant that exists only in People is never authoritative.
+[Relay protocol](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/relay-protocol.md)
 
 ## What members can change
 
-A shared database has one map, `memberWrites`, set by the publisher. Each schema in the map is `owner_only`, `own_records`, or `shared`. A schema that is not in the map is `owner_only`. The albums setup sets `social/Album`, `social/AlbumItem`, and `social/Photo` to `owner_only`, and `social/Comment` to `own_records`.
+A shared database has one map, `memberWrites`, from the People setup catalog.
+Each schema in the map is `owner_only`, `own_records`, or `shared`. A schema
+that is not in the map is `owner_only`. The albums setup sets `social/Album`,
+`social/AlbumItem`, and `social/Photo` to `owner_only`, and `social/Comment`
+to `own_records`. This map is schema policy, not chain access authority.
 
-A member with role `read` cannot submit. That proposal is a final HTTP 403, code `permission_denied`, message `this member cannot submit this shared mutation`, with no `Retry-After`. A member with role `submit` can submit. The publisher accepts or discards each of those submissions from the map and the member's role. Under `own_records`, a member can create a record, and can change or delete a record they created. Under `owner_only`, the publisher discards the member's write. Under `shared`, a member can write any record.
-
-People does not send a per-member schema list for this. A circle link or a preset still chooses `read` or `submit`. What a member may change is `selfAccess.memberWrites` together with the member's role.
+Chain roles are `read`, `submit`, `write`, and `revoked`. Deliver uses
+`grant#any`/`read`. Org uses `write`. Share uses `submit` for proposals. A
+member with role `read` cannot submit. A circle link or a preset still chooses
+`read` or `submit` (or `write` for Org).
 
 ## Choosing a database for an app
 

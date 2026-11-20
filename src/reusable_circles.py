@@ -123,7 +123,8 @@ class ReusableCircles:
                 pending.discard(database)
             operation = operations.get(database)
             if operation and operation["status"] != "confirmed":
-                receipt = {key: outcome[key] for key in ("databaseId", "status", "revision", "error")
+                receipt = {key: outcome[key]
+                           for key in ("databaseId", "status", "entryHash", "writerSeq", "revision", "error")
                            if key in outcome}
                 operations[database] = {"requestId": operation["requestId"], **receipt}
                 if outcome["status"] != "confirmed" and "direct" in operation:
@@ -199,7 +200,8 @@ class ReusableCircles:
             return {**row, "error": plan["error"], "status": "pending"}
         try:
             result = self.circles.apply(row["databaseId"], plan)
-            return {**row, "revision": result["revision"], "status": "confirmed"}
+            return {**row, "entryHash": result.get("entryHash"), "writerSeq": result.get("writerSeq"),
+                    "status": "confirmed"}
         except (PeopleError, OSError, HTTPException) as error:
             return {**row, "error": str(error), "status": "pending"}
 
@@ -224,7 +226,8 @@ def impact(plan):
     if "error" in plan:
         return {**row, **{key: plan[key] for key in ("error", "conflicts") if key in plan}}
     before = {member["nodeKey"]: member for member in plan["previous"]}
-    return {**row, "revision": plan["revision"], "changes": [
+    tip = {key: plan[key] for key in ("entryHash", "writerSeq") if key in plan}
+    return {**row, **tip, "changes": [
         {"nodeKey": member["nodeKey"], "before": before.get(member["nodeKey"]), "after": member}
         for member in plan["members"] if member != before.get(member["nodeKey"])
     ]}

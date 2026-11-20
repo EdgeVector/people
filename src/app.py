@@ -181,7 +181,8 @@ class PeopleApp:
         config = self.sharing.configuration(database["id"])
         if not any(row["nodeKey"] == node_key and row["state"] == "active" for row in config["members"]):
             raise PeopleError("grant access with a circle or `people grant set` before sealing an invitation")
-        return self.sharing.seal(database["id"], node_key, person["contact_code"], config["revision"],
+        tip = {key: config[key] for key in ("entryHash", "writerSeq") if key in config}
+        return self.sharing.seal(database["id"], node_key, person["contact_code"], tip,
                                  self.node.own_key())
 
     def selected(self, selector, rows=None):

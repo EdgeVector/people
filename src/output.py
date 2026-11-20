@@ -31,8 +31,10 @@ def scope(writes):
 
 
 def grant(member):
-    if not member or member.get("state") == "revoked":
+    if not member or member.get("state") == "revoked" or member.get("role") == "revoked":
         return "no access"
+    if member.get("role") == "write":
+        return "can write directly"
     if member.get("role") == "submit":
         return "can submit changes"
     if member.get("role") == "read":
@@ -93,7 +95,9 @@ def change(value):
     for row in value.get("databases", []):
         title = row["name"] or row["databaseId"]
         if "status" in row:
-            lines.append(f"{title}: {row['status']}" + (f" at revision {row['revision']}" if "revision" in row else ""))
+            tip = (f" at entry {row['entryHash']}" if "entryHash" in row
+                   else f" at revision {row['revision']}" if "revision" in row else "")
+            lines.append(f"{title}: {row['status']}" + tip)
         elif "error" not in row and not row["changes"]:
             lines.append(f"{title}: access stays the same")
         if "error" in row:
@@ -107,12 +111,16 @@ def change(value):
     if value.get("pending"):
         lines.append(f"unfinished: {', '.join(value['pending'])}. Run `people db retry`.")
     if "status" in value and "databases" not in value:
-        lines.append(f"status: {value['status']}" + (f" at revision {value['revision']}" if "revision" in value else ""))
+        tip = (f" at entry {value['entryHash']}" if "entryHash" in value
+               else f" at revision {value['revision']}" if "revision" in value else "")
+        lines.append(f"status: {value['status']}" + tip)
     if value.get("applied") is False or ("token" in value and "applied" not in value):
         lines.append("Nothing was changed. " + ("Approve it with `people request approve`."
                                                 if "requestId" in value else "Rerun with --apply to make this change."))
         if "token" in value:
             lines.append(f"token: {value['token']}")
+    elif "entryHash" in value and "databases" not in value and "status" not in value:
+        lines.append(f"revoked at entry {value['entryHash']}")
     elif "revision" in value and "databases" not in value and "status" not in value:
         lines.append(f"revoked at revision {value['revision']}")
     return "\n".join(lines)

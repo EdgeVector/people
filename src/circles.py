@@ -1,4 +1,8 @@
-"""Resolve private circle membership into one whole-database sharing spec."""
+"""Resolve private circle membership into publisher-signed grant operations.
+
+People computes desired roles from circles. LastDB authors the chain entries.
+Chain grants are authoritative; People-local CirclePolicy is intent only.
+"""
 
 from __future__ import annotations
 
@@ -8,13 +12,12 @@ import json
 import re
 
 from lastdb import PeopleError
+from sharing import member_row
 
 
 SCHEMA = "people/CirclePolicy"
 FULL = "all"
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
-
-
 class GrantReview(PeopleError):
     def __init__(self, changes):
         super().__init__("Review grants changed outside People before updating this database.")
@@ -58,7 +61,7 @@ class Circles:
             raise PeopleError("save verified contacts before sharing with them")
         if any(key not in keys for key in restore):
             raise PeopleError("choose circle members to restore")
-        members = current["members"]
+        members = [row for row in current["members"] if row["nodeKey"] != "any"]
         direct = dict(policy["direct"])
         member_by_key = {row["nodeKey"]: row for row in members}
         if direct_change:
@@ -84,24 +87,28 @@ class Circles:
                 direct[key] = scope_for_role(member["role"])
         for key in direct:
             desired.setdefault(key, [])
-        replacement = merge(members, before, desired, set(restore), direct, definitions)
+        desired_roles = desired_member_roles(desired, direct, definitions, restore, members)
         if direct_change and direct_change["operation"] == "revokePerson":
-            replacement = [revoke_row(target) if row["nodeKey"] == direct_key else row for row in replacement]
-        if len(replacement) > 98:
+            desired_roles.pop(direct_key, None)
+        if len(desired_roles) + sum(1 for row in members if row["state"] == "revoked"
+                                    and row["nodeKey"] not in desired_roles) > 98:
             raise PeopleError("This database allows 98 roster entries, including revoked people.")
+        ops = grant_ops(members, desired_roles)
+        replacement = projected_members(members, desired_roles)
         next_policy = {"circles": circles, "direct": direct,
                        "confirmed": {row["nodeKey"]: grant_value(row)
-                                     for row in replacement if row["nodeKey"] in desired}}
-        return {"revision": current["revision"], "previous": members, "members": replacement,
-                "policy": next_policy}
+                                     for row in replacement if row["nodeKey"] in desired_roles}}
+        return {"previous": members, "members": replacement, "ops": ops, "policy": next_policy,
+                "entryHash": current.get("entryHash"), "writerSeq": current.get("writerSeq")}
 
     def apply(self, database, plan):
-        revision, policy = plan["revision"], plan["policy"]
-        if plan["members"] != plan["previous"]:
-            revision = self.sharing.apply_members(database, revision, plan["members"], policy)
+        if plan["ops"]:
+            receipt = self.sharing.apply_ops(database, plan["ops"], plan["policy"])
         else:
-            store_policy(self.node, database, policy)
-        return {"revision": revision, "circles": policy["circles"]}
+            store_policy(self.node, database, plan["policy"])
+            receipt = {"entryHash": plan.get("entryHash"), "writerSeq": plan.get("writerSeq")}
+        return {"entryHash": receipt.get("entryHash"), "writerSeq": receipt.get("writerSeq"),
+                "circles": plan["policy"]["circles"]}
 
     @contextmanager
     def lock(self):
@@ -152,19 +159,16 @@ def resolve(circles):
 
 
 def scope_for_role(role):
-    """A direct grant remembers read or submit. The database map decides the schemas."""
+    """A direct grant remembers read, submit, or write. The setup map decides schemas."""
+    if role == "write":
+        return "write"
     return "all" if role == "submit" else []
 
 
-def wire_member(key, role, state, *, regrant=False):
-    row = {"nodeKey": key, "role": role, "state": state}
-    if regrant:
-        row["regrant"] = True
-    return row
-
-
-def revoke_row(row):
-    return {"nodeKey": row["nodeKey"], "role": row["role"], "state": "revoked"}
+def role_for_scope(scope):
+    if scope == "write":
+        return "write"
+    return "submit" if scope else "read"
 
 
 def apply_direct_intent(direct, change, target, definitions, restore):
@@ -175,17 +179,20 @@ def apply_direct_intent(direct, change, target, definitions, restore):
         direct.pop(key, None)
         return restore
     scope = change["writeSchemas"]
-    scope = normalize([{"name": "Direct grant", "members": [key], "writeSchemas": scope}],
-                      definitions)[0]["writeSchemas"]
-    scope = scope if scope == FULL else named_scope(scope, [])
+    if scope == "write":
+        stored = "write"
+    else:
+        scope = normalize([{"name": "Direct grant", "members": [key], "writeSchemas": scope}],
+                          definitions)[0]["writeSchemas"]
+        stored = scope if scope == FULL else named_scope(scope, [])
     if operation == "restorePerson":
         if target and target["state"] == "revoked":
             restore = [*restore, key]
-        elif not target or direct.get(key) != scope:
+        elif not target or direct.get(key) != stored:
             raise PeopleError("choose a person whose access is revoked")
     elif target and target["state"] == "revoked":
         raise PeopleError("explicitly restore this person's access")
-    direct[key] = scope
+    direct[key] = stored
     return restore
 
 
@@ -194,6 +201,10 @@ def grant_value(member):
 
 
 def outside_changes(members, before, policy, definitions):
+    """Chain grants that differ from People's last confirmed intent.
+
+    A grant that exists only in People is ignored here: the chain is authority.
+    """
     confirmed = policy.get("confirmed", {})
     changes = []
     for row in members:
@@ -203,7 +214,7 @@ def outside_changes(members, before, policy, definitions):
         previous = confirmed.get(key)
         if previous is None:
             scope = combine_scope(before[key], policy["direct"].get(key), definitions)
-            previous = {"state": "active", "role": "submit" if scope else "read"}
+            previous = {"state": "active", "role": role_for_scope(scope)}
         else:
             previous = grant_value(previous)
         current = grant_value(row)
@@ -212,24 +223,47 @@ def outside_changes(members, before, policy, definitions):
     return changes
 
 
-def merge(current, before, desired, restore, direct, definitions):
-    members = {row["nodeKey"]: wire_member(row["nodeKey"], row["role"], row["state"]) for row in current}
-    for key in before.keys() - desired.keys():
-        previous = members.get(key)
-        if previous and previous["state"] == "active":
-            if key in direct:
-                scope = direct[key]
-                members[key] = wire_member(key, "submit" if scope else "read", "active")
-            else:
-                members[key] = revoke_row(previous)
+def desired_member_roles(desired, direct, definitions, restore, members):
+    """Map each person People intends to share with to a chain role."""
+    roles = {}
+    revoked = {row["nodeKey"] for row in members if row["state"] == "revoked"}
     for key, scope in desired.items():
-        previous = members.get(key)
-        if previous and previous["state"] == "revoked" and key not in restore:
+        if key in revoked and key not in restore:
             continue
-        scope = combine_scope(scope, direct.get(key), definitions)
-        members[key] = wire_member(key, "submit" if scope else "read", "active",
-                                   regrant=bool(previous and previous["state"] == "revoked"))
-    return [members[key] for key in sorted(members)]
+        roles[key] = role_from_scopes(scope, direct.get(key), definitions)
+    return roles
+
+
+def role_from_scopes(circle, direct, definitions):
+    if direct == "write":
+        return "write"
+    return role_for_scope(combine_scope(circle, direct, definitions))
+
+
+def grant_ops(members, desired_roles):
+    current = {row["nodeKey"]: row for row in members}
+    ops = []
+    for key, role in sorted(desired_roles.items()):
+        previous = current.get(key)
+        if previous and previous["state"] == "active" and previous["role"] == role:
+            continue
+        ops.append({"op": "grant", "nodeKey": key, "role": role})
+    for key, row in sorted(current.items()):
+        if key in desired_roles or row["state"] == "revoked":
+            continue
+        ops.append({"op": "revoke", "nodeKey": key})
+    return ops
+
+
+def projected_members(members, desired_roles):
+    rows = {row["nodeKey"]: member_row(row["nodeKey"], row["role"] if row["state"] != "revoked" else "revoked")
+            for row in members}
+    for key, role in desired_roles.items():
+        rows[key] = member_row(key, role)
+    for key, row in list(rows.items()):
+        if key not in desired_roles and row["state"] == "active":
+            rows[key] = member_row(key, "revoked")
+    return [rows[key] for key in sorted(rows)]
 
 
 def combine_scope(circle, direct, definitions):

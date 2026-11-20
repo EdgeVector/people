@@ -224,7 +224,7 @@ def parse_scope(change, fields):
     scope = change.get("writeSchemas")
     if change.keys() != fields | {"writeSchemas"}:
         raise PeopleError("choose one write preset or a list of installed schema names")
-    if scope == "all":
+    if scope in ("all", "write"):
         return scope
     if not isinstance(scope, list) or any(not isinstance(name, str) for name in scope):
         raise PeopleError("choose installed schema names")
@@ -236,5 +236,7 @@ def status(declaration, receipt=None):
     result = {"requestId": declaration["requestId"], "appId": declaration["appId"],
               "databaseId": change["databaseId"], "change": change, "status": "awaitingApproval"}
     if receipt:
-        result.update({key: receipt[key] for key in ("status", "revision", "error") if key in receipt})
+        result.update({key: receipt[key]
+                       for key in ("status", "entryHash", "writerSeq", "revision", "error")
+                       if key in receipt})
     return result

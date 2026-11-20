@@ -5,7 +5,7 @@ import sys
 
 import changes
 from lastdb import PeopleError
-from sharing import read_consent
+from consent import read_consent
 
 
 def person_add(app, args):

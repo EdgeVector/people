@@ -1,6 +1,0 @@
-{
-  "social/Album": "owner_only",
-  "social/AlbumItem": "owner_only",
-  "social/Comment": "own_records",
-  "social/Photo": "owner_only"
-}

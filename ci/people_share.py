@@ -6,7 +6,7 @@ import os
 import time
 import uuid
 
-from people_app import (SETUP, expect_setup_member_writes_pending, install, observe_access,
+from people_app import (SETUP, expect_setup_offline, install, observe_access,
                         open_content_apps, pick, read_album, read_records, report_content_flow, sdk,
                         people, write_owned)
 from support import require, retry, run_operation, summary
@@ -97,7 +97,7 @@ def transfer(programs, root, publisher, recipient, api_key):
     if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
     # The recipient has no cloud account. Create must still place the schemas and say the map is pending.
-    expect_setup_member_writes_pending(recipient, name + "-offline")
+    expect_setup_offline(recipient, name + "-offline")
     created = sdk(publisher, "create-shared", name=name)
     database = str(uuid.UUID(created["id"]))
     require(database == created["id"] and created.get("sharingMode") == "whole_database"
@@ -118,8 +118,7 @@ def transfer(programs, root, publisher, recipient, api_key):
             and connected["credentials_saved"] is True, "people_dev_connection")
     publisher.keep_saved_credentials = True
     publisher.start()
-    # The publisher is connected, so setup can store the member-write map on this share.
-    finish_member_writes(publisher, database)
+    finish_shared_albums(publisher, database)
     verify_shared_albums_setup(publisher, name + "-albums")
     contact = root / "reader.contact"
     reader_key = programs.command(recipient.home, [
@@ -138,22 +137,22 @@ def transfer(programs, root, publisher, recipient, api_key):
     check_role_and_overview(programs, root, publisher, database, name, contact, reader_key)
 
 
-def finish_member_writes(node, database):
-    """Install shared-albums schemas. memberWrites is catalog policy, not chain access."""
+def finish_shared_albums(node, database):
+    """Install shared-albums schemas on an owned database."""
     finished = people(node, "db", "verify", database, "--setup", "shared-albums", "--finish")
-    expected = json.loads((SETUP / "member-writes.json").read_text())
-    require(finished["databaseId"] == database and finished["memberWrites"] == expected,
-            "people_share_member_writes")
+    require(finished["databaseId"] == database and "memberWrites" not in finished
+            and set(finished["definitions"]) == {
+                "social/Album", "social/AlbumItem", "social/Photo", "social/Comment"},
+            "people_share_setup_finished")
 
 
 def verify_shared_albums_setup(node, name):
     setup = {"setupName": "shared-albums", "requiredVersion": 1}
-    expected_writes = json.loads((SETUP / "member-writes.json").read_text())
     created = people(node, "db", "create", name, "--setup", setup["setupName"])
     database = created["databaseId"]
     require(str(uuid.UUID(database)) == database and created["name"] == name
             and created["setupName"] == setup["setupName"] and created["version"] == 1
-            and created["databaseId"] == database and created["memberWrites"] == expected_writes,
+            and created["databaseId"] == database and "memberWrites" not in created,
             "people_named_setup_database")
     definitions = created["definitions"]
     require(set(definitions) == {"social/Album", "social/AlbumItem", "social/Photo", "social/Comment"},
@@ -254,7 +253,7 @@ def check_role_and_overview(programs, root, publisher, other_database, name, con
             "people_role_database")
     summary(f"Owned DEV role-check database `{database}`.")
     print(f"People DEV role-check database {database}", flush=True)
-    finish_member_writes(publisher, database)
+    finish_shared_albums(publisher, database)
     retry("people_role_grants", lambda: roster(publisher, database),
           lambda config: config.get("members") == [])
     people(publisher, "invite", database, reader_key, refusal=b"grant access with a circle")

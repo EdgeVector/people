@@ -152,9 +152,9 @@ const albums = root.select(verified.databaseId);
 albums.rememberDefinition('social/Album', verified.definitions['social/Album']!);
 ```
 
-The setup result includes `memberWrites` from the People catalog. That map is
-schema policy for the setup, not chain access authority. Access comes from
-publisher-signed grant entries on the LastDB chain.
+Access comes from publisher-signed grant entries on the LastDB chain. The
+member role is `read`, `submit`, or `write` (plus `revoked`). There is no
+database-wide write map.
 
 Verification by ID also works on a received share once it has synced its
 schemas. Setup version 1 requires the catalog's schema shapes and leaves

@@ -174,23 +174,17 @@ function parseInvitation(result) {
   throw invalid('People returned an invalid invitation receipt');
 }
 
-function memberWritesOk(value) {
-  if (value === 'pending') return true;
-  return isObject(value) && Object.values(value).every((item) =>
-    item === 'owner_only' || item === 'own_records' || item === 'shared');
-}
-
 function parseSetup(result, request) {
   if (isObject(result)) {
-    const { databaseId, name, setupName, version, definitions, memberWrites } = result;
+    const { databaseId, name, setupName, version, definitions } = result;
     if (typeof databaseId === 'string' && databaseId.length > 0
       && (request.databaseId === undefined || databaseId === request.databaseId)
       && (name === null || typeof name === 'string')
       && setupName === request.setupName && version === (request.requiredVersion ?? 1)
-      && isObject(definitions) && memberWritesOk(memberWrites)) {
+      && isObject(definitions)) {
       const ids = Object.values(definitions);
       if (ids.length > 0 && ids.every((id) => typeof id === 'string' && /^[0-9a-f]{64}$/.test(id))) {
-        return { databaseId, name, setupName, version, definitions, memberWrites };
+        return { databaseId, name, setupName, version, definitions };
       }
     }
   }

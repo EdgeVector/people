@@ -186,14 +186,9 @@ def people(node, *arguments, stdin=None, refusal=None, refusals=(), notices=None
     return decode_json(result.stdout)
 
 
-def expect_setup_member_writes_pending(node, name):
-    """Create a setup on a node with no cloud account.
-
-    memberWrites is catalog schema policy (not chain access and not an ExeMem
-    side channel), so it is present even without a cloud account.
-    """
+def expect_setup_offline(node, name):
+    """Create a setup on a node with no cloud account. Schemas land locally."""
     require(not (node.home / CREDENTIALS_FILE).exists(), "people_setup_offline_has_no_cloud_account")
-    expected = json.loads((SETUP / "member-writes.json").read_text())
     created = people(node, "db", "create", name, "--setup", "shared-albums")
     database = created["databaseId"]
     definitions = created["definitions"]
@@ -202,14 +197,14 @@ def expect_setup_member_writes_pending(node, name):
     except ValueError:
         parsed = ""
     require(parsed == database and created["name"] == name and created["setupName"] == "shared-albums"
-            and created["version"] == 1 and created["memberWrites"] == expected
+            and created["version"] == 1 and "memberWrites" not in created
             and set(definitions) == {"social/Album", "social/AlbumItem", "social/Photo", "social/Comment"}
             and all(isinstance(item, str) and len(item) == 64 for item in definitions.values()),
-            "people_setup_offline_member_writes")
+            "people_setup_offline_schemas")
     shown = people(node, "db", "show", database)
     require(shown["database"]["id"] == database and shown["schemas"] == definitions,
-            "people_setup_offline_schemas")
-    summary(f"Setup `{database}` was created with no cloud account; catalog memberWrites applied locally.")
+            "people_setup_offline_shown")
+    summary(f"Setup `{database}` was created with no cloud account; schemas applied locally.")
     return created
 
 
@@ -337,22 +332,13 @@ def read_album(node, selections, database, key, title=None):
                for page in pages)
 
 
-def extend_member_writes(node, database, extra):
-    """Schema policy extras for CI. Not chain access authority."""
-    del node, database
-    expected = json.loads((SETUP / "member-writes.json").read_text())
-    return {**expected, **extra}
-
-
-def observe_access(node, database, state, tip=None, *, role="read", write_schemas=None,
-                   member_writes=None):
+def observe_access(node, database, state, tip=None, *, role="read"):
+    """Wait until selfAccess reflects the folded chain grant role."""
     def matches(result):
         access = result["database"]["selfAccess"]
         return (access["state"] == state and access.get("confirmedAtMs") and not access.get("stale")
                 and (tip is None or access.get("entryHash") == tip)
-                and (state != "active" or access["role"] == role)
-                and (write_schemas is None or access.get("writeSchemas") == write_schemas)
-                and (member_writes is None or access.get("memberWrites") == member_writes))
+                and (state != "active" or access["role"] == role))
     retry(f"people_recipient_access_{state}", lambda: people(node, "db", "show", database), matches)
 
 

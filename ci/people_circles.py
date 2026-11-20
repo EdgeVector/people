@@ -11,11 +11,11 @@ from circle_comments import (
     verify_settled_retry,
 )
 from circle_report import (
-    attach, cell, check, fail, mark, require_absent, saw, wait, wait_field,
+    attach, cell, check, fail, mark, saw, wait, wait_field,
 )
 from direct_nodes import clip_public
 from node import Connection
-from people_app import expect_setup_member_writes_pending, extend_member_writes, install, observe_access, read_records, sdk, people, write_owned
+from people_app import expect_setup_offline, install, observe_access, read_records, sdk, people, write_owned
 from people_declarations import configure_bindings, external_changes, independent_update, revoke_roster
 from people_log_views import scope_for
 from support import OperationError, decode_json, run_operation, summary
@@ -169,7 +169,7 @@ def transfer(programs, root, publisher, recipient, api_key):
 def _transfer(programs, root, publisher, recipient, api_key, name, state):
     if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
-    expect_setup_member_writes_pending(recipient, f"{name}-offline")
+    expect_setup_offline(recipient, f"{name}-offline")
     created = sdk(publisher, "create-shared", name=name)
     check(created["sharingMode"] == "whole_database" and created["name"] == name, "circle_sdk_create",
           saw("create", mode=created.get("sharingMode"), name_match=created.get("name") == name))
@@ -194,17 +194,17 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
     people(publisher, "person", "add", "Ana", "--node-key", reader, "--contact", str(contact), refusals=REFUSALS)
     wait_cloud("circle_cloud_ready", publisher, database)
     placed = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
-    check(placed["databaseId"] == database and isinstance(placed["memberWrites"], dict), "circle_setup_finish",
+    check(placed["databaseId"] == database and "memberWrites" not in placed
+          and set(placed["definitions"]) >= {ALBUM, COMMENT}, "circle_setup_finish",
           saw("setup", id_match=placed.get("databaseId") == database,
-              writes=isinstance(placed.get("memberWrites"), dict)))
+              schemas=len(placed.get("definitions") or {})))
     definitions.update(placed["definitions"])
-    member_writes = extend_member_writes(publisher, database, {COMMENT: "shared", ALBUM: "owner_only"})
     shown = set(people(publisher, "db", "show", database)["schemas"])
     check(set(definitions).issubset(shown), "circle_schema_catalog_missing",
           saw("schemas", missing=len(set(definitions) - shown)))
     wait_cloud("circle_second_cloud_ready", publisher, second)
     try:
-        share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender, member_writes)
+        share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender)
     finally:
         failed = sys.exc_info()[0] is not None
         cleanup_error = None
@@ -218,7 +218,7 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
             raise cleanup_error
 
 
-def share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender, member_writes):
+def share_with_circle(publisher, recipient, database, second, definitions, scope, reader, sender):
     created = edit_circle(publisher)
     circle = created["circle"]
     check(revisions(created) == {} and circle["name"] == "Family" and not circle["members"]
@@ -235,13 +235,13 @@ def share_with_circle(publisher, recipient, database, second, definitions, scope
           "circle_sdk_sealed_invitation",
           saw("seal", publisher=receipt.get("publisher") == sender, database=receipt.get("databaseId") == database,
               tip=isinstance(receipt.get("entryHash"), str)))
-    exercise(publisher, recipient, database, receipt, definitions, scope, member_writes)
+    exercise(publisher, recipient, database, receipt, definitions, scope)
     exercise_comment_ownership(publisher, recipient, database, definitions, scope, reader)
     second_receipt = people(publisher, "invite", second, reader)
     people(recipient, "db", "accept", "--publisher", sender, "--name", "second", stdin=second_receipt)
     wait_text("Ana", recipient, second, COMMENT, "seed", "Second database", "circle_second_database_read")
     observe_access(recipient, second, "active")
-    definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT], scope, member_writes)
+    definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT], scope)
     read_links = ("--link", f"{database}=read", "--link", f"{second}={COMMENT}")
     preview = people(publisher, "circle", "set", "Family", *read_links)
     people(publisher, "grant", "revoke", second, reader, "--apply")
@@ -313,7 +313,7 @@ def connect(programs, publisher, api_key):
               saved=receipt.get("credentials_saved")))
 
 
-def exercise(publisher, recipient, database, receipt, definitions, scope, member_writes):
+def exercise(publisher, recipient, database, receipt, definitions, scope):
     accepted = sdk(recipient, "accept", receipt=receipt, publisher=receipt["publisher"], name="family")
     check(accepted["id"] == database and accepted["sharingMode"] == "whole_database", "circle_received_database",
           saw("accept", id_match=accepted.get("id") == database, mode=accepted.get("sharingMode")))
@@ -325,28 +325,26 @@ def exercise(publisher, recipient, database, receipt, definitions, scope, member
           "%s %s" % (cell("Ana", album, "text"), cell("viewer", second_app, "text")))
     check(album["fields"]["text"] == f"Initial {ALBUM}", "circle_sdk_read_shared_content", cell("Ana", album, "text"))
     report("The packaged SDK used People to create a whole-database share, seal a circle invitation and accept it. The recipient read shared data through the LastDB SDK.")
-    observe_access(recipient, database, "active", 1, role="submit", member_writes=member_writes)
+    observe_access(recipient, database, "active", role="submit")
     sdk_access = next(row for row in sdk(recipient, "list-databases") if row["id"] == database)["selfAccess"]
     check(sdk_access["state"] == "active" and sdk_access["stale"] is False and sdk_access["role"] == "submit"
-          and sdk_access.get("memberWrites") == member_writes, "circle_sdk_confirmed_grant",
-          saw("grant", state=sdk_access.get("state"), role=sdk_access.get("role"), stale=sdk_access.get("stale"),
-              writes=sdk_access.get("memberWrites") == member_writes))
+          and "memberWrites" not in sdk_access, "circle_sdk_confirmed_grant",
+          saw("grant", state=sdk_access.get("state"), role=sdk_access.get("role"), stale=sdk_access.get("stale")))
     created = mutation(COMMENT, definitions[COMMENT], "allowed", "From Ana")
     created["metadata"] = {"share_author": "unverified-author"}
     updates = [
-        mutation(ALBUM, definitions[ALBUM], "blocked", "Cannot write"),
         created,
         mutation(COMMENT, definitions[COMMENT], "seed", "A create cannot replace the seed"),
     ]
     queued = queue_and_restart(publisher, recipient, database, scope, updates,
                                check_status=True)
     verify_results(recipient, database, queued)
-    verify_settled_retry(publisher, recipient, database, scope, updates[1], queued[1])
+    verify_settled_retry(publisher, recipient, database, scope, updates[0], queued[0])
     for name, node in (("publisher", publisher), ("Ana", recipient)):
         wait_text(name, node, database, COMMENT, "allowed", "From Ana", "circle_authorized_write_applied")
-        require_absent(name, query(node, database, ALBUM, "blocked"), "circle_forbidden_write_missing", "text")
         wait_text(name, node, database, COMMENT, "seed", f"Initial {COMMENT}", "circle_invalid_create_discarded")
-    message = "The publisher kept Ana's Comment and discarded the Album write and the create that targeted the seed."
+    message = ("Ana's submit-role proposal for Comment was incorporated. The create that "
+               "targeted the existing seed was discarded. Access came from the chain grant role.")
     print(message, flush=True)
     summary(message)
 

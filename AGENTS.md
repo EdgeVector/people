@@ -16,9 +16,9 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
   block lists the nine full names for read and for write.
 - `setups/shared-albums-v1/` holds the schema definitions of the
   `shared-albums` version 1 setup. This is the only copy of the
-  definitions. Shared databases are whole-database shares; member write
-  behaviour comes from the publisher's setup `memberWrites` catalog map
-  (schema policy, not chain access), not from a LastDB share-spec catalog.
+  definitions. Shared databases are whole-database shares. Member access
+  is the per-member chain role (`read`, `submit`, `write`, or `revoked`)
+  from publisher-signed grant entries. There is no database-wide write map.
 
 ## Rules
 

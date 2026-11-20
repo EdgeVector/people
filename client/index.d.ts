@@ -55,10 +55,6 @@ export interface PeopleDatabaseSetup {
   version: number;
   /** Verified installed definition IDs keyed by canonical schema name. */
   definitions: Record<string, string>;
-  /**
-   * Catalog schema policy for the setup. Not chain access authority.
-   */
-  memberWrites: Record<string, 'owner_only' | 'own_records' | 'shared'>;
 }
 
 type PeopleGrantScope =

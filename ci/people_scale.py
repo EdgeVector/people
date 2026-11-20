@@ -54,9 +54,10 @@ def scale(programs, root, publisher, recipient, api_key):
     publisher.keep_saved_credentials = True
     publisher.start()
     finished = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
-    expected = json.loads((SETUP / "member-writes.json").read_text())
-    require(finished["databaseId"] == database and finished["memberWrites"] == expected,
-            "people_scale_member_writes")
+    require(finished["databaseId"] == database and "memberWrites" not in finished
+            and set(finished["definitions"]) == {
+                "social/Album", "social/AlbumItem", "social/Photo", "social/Comment"},
+            "people_scale_setup_finished")
     contact = root / "reader.contact"
     reader_key = programs.command(recipient.home, [
         "share", "contact", "--out", str(contact),

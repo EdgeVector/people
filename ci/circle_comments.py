@@ -106,17 +106,14 @@ def exercise_comment_ownership(publisher, recipient, database, definitions, scop
     current = next(page for (name, _node), page in zip(named, pages) if name == "Ana")["receiver"]
     delete = {**mine, "mutation_type": "delete", "record": {},
               "expected": {"type": "revision", "revision": current["revision"]}}
-    album = recipe.mutation("social/Album", definitions["social/Album"], "member-album", "")
-    album["record"] = {"title": "Not allowed", "description": "Member write", "cover_photo_id": "none",
-                       "created_at": "2026-11-14T00:00:00Z"}
-    queue_and_restart(publisher, recipient, database, scope, [delete, album])
+    queue_and_restart(publisher, recipient, database, scope, [delete])
     expected.pop("receiver")
     wait_pages(named, "standard_own_delete_applied", lambda node: _delete_view(node, database),
                _gone(expected), delete_line)
-    recipe.report("Ana edited and deleted her own comment. The publisher discarded her edit of the publisher's comment and her Album write.")
+    recipe.report("Ana edited and deleted her own comment. The publisher discarded her edit of the publisher's comment.")
 
 
-def exercise_upgrade(publisher, recipient, database, previous, scope, member_writes):
+def exercise_upgrade(publisher, recipient, database, previous, scope):
     recipe = _recipe()
     new = recipe.declare(publisher, database, recipe.COMMENT, expanded=True)
     check(new != previous, "circle_schema_upgrade_new_definition", saw("definition", changed=new != previous))
@@ -125,7 +122,7 @@ def exercise_upgrade(publisher, recipient, database, previous, scope, member_wri
     write_owned(publisher, database, seeded)
     recipe.wait_text("Ana", recipient, database, recipe.COMMENT, "upgrade", "Before edit",
                      "circle_upgraded_record_received")
-    observe_access(recipient, database, "active", 1, role="submit", member_writes=member_writes)
+    observe_access(recipient, database, "active", role="submit")
     current = recipe.query(recipient, database, recipe.COMMENT, "upgrade")[0]
     update = recipe.mutation(recipe.COMMENT, new, "upgrade", "After edit")
     update.update(mutation_type="replace", expected={"type": "revision", "revision": current["revision"]},
@@ -149,7 +146,7 @@ def exercise_upgrade(publisher, recipient, database, previous, scope, member_wri
 
 def exercise_reader(publisher, recipient, database, definitions, scope):
     recipe = _recipe()
-    observe_access(recipient, database, "active", 2)
+    observe_access(recipient, database, "active", role="read")
     recipe.wait_text("Ana", recipient, database, recipe.COMMENT, "allowed", "From Ana",
                      "circle_reader_retains_access")
     update = recipe.mutation(recipe.COMMENT, definitions[recipe.COMMENT], "reader", "Reader submission")

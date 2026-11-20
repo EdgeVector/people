@@ -15,8 +15,6 @@ SHARED_ALBUMS = "shared-albums"
 VERSION = 1
 ALBUM_SCHEMAS = ("Album", "AlbumItem", "Photo", "Comment")
 CATALOG = Path(__file__).resolve().parents[1] / "setups" / "shared-albums-v1"
-MEMBER_WRITES = "member-writes.json"
-WRITE_BEHAVIOURS = {"owner_only", "own_records", "shared"}
 SCHEMA = "people/DatabaseSetup"
 LABEL = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 DEFINITION_ID = re.compile(r"[0-9a-f]{64}\Z")
@@ -52,17 +50,14 @@ class Setups:
             if finish:
                 if database["kind"] != "shareable" or not database.get("name"):
                     raise PeopleError("select a named database you own to finish setup")
-                database, verified, member_writes = self.provision(
+                database, verified = self.provision(
                     database["name"], definitions, existing=database)
             else:
                 verified = self.verify(value, definitions)
-                member_writes = self.member_writes_state(database, read_member_writes())
         else:
-            database, verified, member_writes = self.provision(value, definitions)
-        announce_pending(database, setup, member_writes)
+            database, verified = self.provision(value, definitions)
         return {"databaseId": database["id"], "name": database.get("name"),
-                "setupName": setup, "version": version, "definitions": verified,
-                "memberWrites": member_writes}
+                "setupName": setup, "version": version, "definitions": verified}
 
     def database(self, database_id):
         row = next((row for row in self.sharing.databases() if row["id"] == database_id), None)
@@ -87,18 +82,13 @@ class Setups:
         if database["id"] != database_id or database["kind"] != "shareable":
             raise PeopleError("this setup belongs to an owned database")
         database_id = database["id"]
-        expected = read_member_writes()
         if saved["fields"]["ready"]:
-            verified = self.verify(database_id, definitions)
-            return database, verified, self.member_writes_state(database, expected)
+            return database, self.verify(database_id, definitions)
         installed = self.verify(database_id, definitions, allow_missing=True)
         missing = [request for schema, request in definitions.items() if schema not in installed]
         if missing:
             with ThreadPoolExecutor(max_workers=len(missing)) as pool:
                 list(pool.map(lambda request: self.install(database_id, request), missing))
-        # memberWrites is People/setup schema policy from the catalog, not chain
-        # access authority and not an ExeMem share-settings side channel.
-        stored = expected if expected is not None else {}
         verified = self.verify(database_id, definitions)
         fields = {"database_id": database_id, "ready": True}
         try:
@@ -106,7 +96,7 @@ class Setups:
         except LastDBError as error:
             if error.status != 409 or (self.node.get_record(SCHEMA, key) or {}).get("fields") != fields:
                 raise
-        return database, verified, stored
+        return database, verified
 
     def reserve(self, name, key, existing):
         if existing is None:
@@ -147,43 +137,12 @@ class Setups:
             verified[name] = row["definition_id"]
         return verified
 
-    def member_writes_state(self, database, expected):
-        """Catalog setup policy. Not chain access; not ExeMem share-settings."""
-        if expected is None:
-            return {}
-        if database.get("kind") != "shareable":
-            stored = (database.get("selfAccess") or {}).get("memberWrites")
-            return stored if isinstance(stored, dict) else "pending"
-        return expected
-
-
-def announce_pending(database, setup, member_writes):
-    """No cloud-dependent memberWrites side channel remains."""
-    del database, setup, member_writes
-
-
-def read_member_writes(catalog=CATALOG):
-    """The setup's map, or None when the setup has no member-writes file."""
-    path = catalog / MEMBER_WRITES
-    if not path.is_file():
-        return None
-    try:
-        value = json.loads(path.read_text())
-    except json.JSONDecodeError as error:
-        raise PeopleError("the setup member-write map is invalid") from error
-    if (not isinstance(value, dict) or any(
-            not isinstance(name, str) or behaviour not in WRITE_BEHAVIOURS
-            for name, behaviour in value.items())):
-        raise PeopleError("the setup member-write map is invalid")
-    return value
-
 
 def declaration(database_id, request):
     """The declare_schema body. Both sockets send the catalog app_id.
 
-    The catalog name is the stored name, such as social/Album. People does
-    not list that name in access.write. The databases extension is the grant
-    for this call.
+    The catalog name is the stored name, such as social/Album. Access comes
+    from the signed chain grant role, not a database-wide write map.
     """
     body = {"database": database_id, "app_id": request["app_id"], "schema": request["schema"]}
     if "retention" in request:

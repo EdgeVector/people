@@ -171,32 +171,29 @@ so that rule applies to comments in the setup.
 
 `people db create family --setup shared-albums` creates a whole-database share
 and places `social/Album`, `social/AlbumItem`, `social/Photo`, and
-`social/Comment` through the `declare_schema` action. It also sets the
-member-write map when the share configuration is confirmed. The node owns
-the wait for cloud enrollment, up to 30 seconds. People does not wait and
-does not retry.
+`social/Comment` through the `declare_schema` action. The node owns the wait
+for cloud enrollment, up to 30 seconds. People does not wait and does not
+retry.
 
 A node with no cloud account answers HTTP 409, `this node has no cloud
 account`. `db create --setup` and `db verify --setup` do not fail. The
-database exists, the schemas are placed, the JSON result has
-`"memberWrites": "pending"`, and standard error says to run
+database exists and the schemas are placed. Run
 `people db verify ID --setup shared-albums --finish` once the node is
-connected. That command sets the map.
+connected if setup was interrupted.
 
 HTTP 503 `the database is still enrolling with the cloud; retry`, and any
 other HTTP 503, is an error. People exits non-zero and tells you to run the
-same command again. `share configuration is not confirmed` is an error too.
-It means the node is enrolled and connected, and the service answer could
-not be confirmed.
+same command again. A grant-chain confirmation failure is an error too: the
+node is enrolled and connected, and the service answer could not be
+confirmed.
 
 People records the new database ID before placing those schemas, and resumes
 setup by the same name. `people db verify ID --setup shared-albums` checks an
 owned or received share by its stable ID and reports the current definition
-IDs. Add `--finish` to install missing schemas in an owned database and to
-set the member-write map. Additive schema updates can introduce more fields
-under the same name. When replacing a record, read it first, retain the
-fields and keys you aren't editing, and send the replacement against the
-record's current revision.
+IDs. Add `--finish` to install missing schemas in an owned database.
+Additive schema updates can introduce more fields under the same name. When
+replacing a record, read it first, retain the fields and keys you aren't
+editing, and send the replacement against the record's current revision.
 
 ## Sharing proposals from apps
 
@@ -229,24 +226,23 @@ outside that trust boundary before treating owner approval as app isolation.
 
 ## How sharing works
 
-An active member with role `submit` can send an encrypted change to the
-pending mutation log. The receiver posts `POST /v1/x/databases` with
-`"action": "submit"`, the database id, the mutation document, and
-`idempotency_key` (one non-nil lowercase UUID). The call answers 202 with
-`ok`, `status: submitted`, `mutation_id`, and `submission_sequence`. It does
-not write a record on the receiver. An owned database or an unknown id
-answers 404. A share that is not a whole database answers 403. A member
-whose role is `read` is refused: HTTP 403, code `permission_denied`, message
-`this member cannot submit this shared mutation`, and no `Retry-After`. Do
-not retry. The publisher does not receive that proposal. Only the
-publisher's LastDB can read pending changes. It checks each accepted
-proposal against the member-write map, discards refusals, and uploads
-accepted changes to the separate published log. Receivers follow that log
-and can read the resulting record after it syncs, with `POST /v1/read` and
-the `database` field. An app that
-wants to show the sender's own change before the publisher accepts it uses
+An active member with role `submit` can propose a change. The receiver posts
+`POST /v1/x/databases` with `"action": "submit"`, the database id, the
+mutation document, and `idempotency_key` (one non-nil lowercase UUID). The
+call answers 202 with `ok`, `status: submitted`, `mutation_id`, and
+`submission_sequence`. It does not write a record on the receiver. An owned
+database or an unknown id answers 404. A share that is not a whole database
+answers 403. A member whose role is `read` is refused: HTTP 403, code
+`permission_denied`, message `this member cannot submit this shared mutation`,
+and no `Retry-After`. Do not retry. The publisher does not receive that
+proposal. Only the publisher's LastDB can read pending changes. It
+incorporates accepted proposals onto the signed history. Receivers follow
+that log and can read the resulting record after it syncs, with
+`POST /v1/read` and the `database` field. An app that wants to show the
+sender's own change before the publisher accepts it uses
 `"action": "submission_status"` and shows that pending state.
-`POST /v1/write` to a received database is refused: the database is read only.
+`POST /v1/write` to a received database is refused unless the member's chain
+role is `write`.
 [How sharing works](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/cloud-api.md)
 
 People turns Share, Deliver and Org into publisher-signed grant and revoke
@@ -257,16 +253,14 @@ entry. A grant that exists only in People is never authoritative.
 
 ## What members can change
 
-A shared database has one map, `memberWrites`, from the People setup catalog.
-Each schema in the map is `owner_only`, `own_records`, or `shared`. A schema
-that is not in the map is `owner_only`. The albums setup sets `social/Album`,
-`social/AlbumItem`, and `social/Photo` to `owner_only`, and `social/Comment`
-to `own_records`. This map is schema policy, not chain access authority.
-
-Chain roles are `read`, `submit`, `write`, and `revoked`. Deliver uses
-`grant#any`/`read`. Org uses `write`. Share uses `submit` for proposals. A
-member with role `read` cannot submit. A circle link or a preset still chooses
-`read` or `submit` (or `write` for Org).
+There is no database-wide write map. Access is the per-member role on the
+publisher-signed grant chain: `read`, `submit`, `write`, or `revoked`. People
+reads that role from the grant (and from `selfAccess` once LastDB folds
+`GrantState`). Deliver uses `grant#any`/`read`. Org uses `write`. Share uses
+`submit` for proposals. A member with role `read` cannot submit. A circle
+link or a preset still chooses `read` or `submit` (or `write` for Org).
+LastDB authorizes `invite` from the folded chain grant, not from ExeMem
+members.
 
 ## Choosing a database for an app
 

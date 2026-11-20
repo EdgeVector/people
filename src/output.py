@@ -45,8 +45,6 @@ def grant(member):
 def cell(key, value):
     if value is None:
         return "-"
-    if key == "memberWrites" and isinstance(value, dict):
-        return ", ".join(f"{name}: {behaviour}" for name, behaviour in sorted(value.items())) or "-"
     if key in ("writeSchemas", "links"):
         return scope(value) if key == "writeSchemas" else ", ".join(
             f"{database}: {scope(writes)}" for database, writes in value.items()) or "-"
@@ -75,7 +73,7 @@ def fields(value, indent=""):
         if isinstance(item, list) and item and all(isinstance(row, dict) for row in item):
             lines.append(f"{indent}{key}:")
             lines.extend(f"{indent}  {line}" for line in table(item).splitlines())
-        elif isinstance(item, dict) and key not in ("writeSchemas", "links", "memberWrites"):
+        elif isinstance(item, dict) and key not in ("writeSchemas", "links"):
             lines.append(f"{indent}{key}:")
             lines.append(fields(item, indent + "  "))
         else:

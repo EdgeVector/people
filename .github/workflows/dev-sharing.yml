@@ -15,10 +15,12 @@ name: DEV sharing
 # defaults to environments.dev.exemem_api from the LastDB source under test
 # (same origin #927 prove-dev-relay uses).
 #
-# Cloud steps run only on main. A pull request gets the syntax job and never
-# receives cloud credentials. The sharing job checks out the event commit.
-# It does not check out another ref: that would run branch code in the
-# privileged main job.
+# Cloud steps run on main. A workflow_dispatch of
+# cursor/match-lastdb-build-version-0b0f is also allowed so this unmerged
+# binary_version fix can be proved once against DEV. A pull request gets the
+# syntax job and never receives cloud credentials. The sharing job checks out
+# the event commit. It does not check out another ref: that would run branch
+# code in the privileged job.
 #
 # LastDB build under test:
 # - Empty inputs → pin 8f3ed348… (#1805 on main) until a post-#1805 nightly
@@ -94,7 +96,10 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           SELECTED_REF: ${{ github.ref }}
-        run: test "$SELECTED_REF" = refs/heads/main
+        run: |
+          set -euo pipefail
+          test "$SELECTED_REF" = refs/heads/main \
+            || test "$SELECTED_REF" = refs/heads/cursor/match-lastdb-build-version-0b0f
       - name: Check the recipe syntax
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
@@ -116,7 +121,10 @@ jobs:
 
   new-nightly:
     name: New nightly
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' ||
+       github.ref == 'refs/heads/cursor/match-lastdb-build-version-0b0f')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -360,14 +368,41 @@ jobs:
           mkdir -m 700 "$bin"
           cp -f target/release/lastdb target/release/lastdbd "$bin/"
           chmod 700 "$bin/lastdb" "$bin/lastdbd"
-          version="0.0.0-dev.g${LASTDB_SOURCE_COMMIT:0:9}"
+          # lastdb_node/build.rs stamps FOLDDB_BUILD_VERSION, which both
+          # `--version` lines and the daemon build field report. Precedence
+          # matches resolve_version: a non-empty override, then a People ref
+          # named v<digit>…, then `git describe --tags --always --dirty
+          # --abbrev=9` with one leading v stripped when the next character
+          # is a digit. The old 0.0.0-dev.g<sha> label never matched that stamp.
+          version="${FOLDDB_BUILD_VERSION_OVERRIDE:-}"
+          version="${version#"${version%%[![:space:]]*}"}"
+          version="${version%"${version##*[![:space:]]}"}"
+          if [ -z "$version" ]; then
+            ref_name="${GITHUB_REF_NAME:-}"
+            if [[ "$ref_name" =~ ^v([0-9].*)$ ]]; then
+              version="${BASH_REMATCH[1]}"
+            else
+              version="$(git describe --tags --always --dirty --abbrev=9)"
+              if [[ "$version" =~ ^v([0-9].*)$ ]]; then
+                version="${BASH_REMATCH[1]}"
+              fi
+            fi
+          fi
+          test -n "$version"
+          for name in lastdb lastdbd; do
+            got="$("$bin/$name" --version)"
+            if [ "$got" != "$name $version" ]; then
+              printf '%s --version is %q, expected %q\n' "$name" "$got" "$name $version" >&2
+              exit 1
+            fi
+          done
           {
             printf 'LASTDB_BIN=%s\n' "$bin"
             printf 'LASTDB_VERSION=%s\n' "$version"
           } >> "$GITHUB_ENV"
           {
             printf 'LastDB pinned SHA: `%s`\n\n' "$LASTDB_SOURCE_COMMIT"
-            printf 'LastDB version label: `%s`\n\n' "$version"
+            printf 'LastDB version: `%s`\n\n' "$version"
             printf 'People source: `%s`\n' "$GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Resolve RELAY_URL

@@ -77,7 +77,10 @@ def scale(programs, root, publisher, recipient, api_key):
                "--apply", "--token", preview["token"])
         receipt = sdk(publisher, "invite", database=name, recipient={"name": "Ana", "nodeKey": reader_key})
         invited = True
-        received = sdk(recipient, "accept", publisher=publisher_key, name="scale", receipt=receipt)
+        require(isinstance(receipt.get("consent"), str)
+                and receipt["consent"].startswith("people-consent-v1."), "people_scale_consent")
+        received = sdk(recipient, "accept", publisher=publisher_key, name="scale",
+                       receipt={"consent": receipt["consent"], "databaseId": receipt["databaseId"]})
         require(received.get("id") == database and received.get("sharingMode") == "whole_database",
                 "people_scale_received")
         wait_for_album(recipient, database, 0)

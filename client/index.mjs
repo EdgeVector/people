@@ -98,28 +98,30 @@ export function peopleClient({ dataDir, peoplePath = 'people', lastdbPath }) {
       return parseSetup(await run(['db', 'verify'], [...args, '--', request.databaseId]), request);
     },
 
-    /** Seal an invitation. Grant access with a circle or `grant set` first. Omit contactPath when People already remembers the recipient. */
+    /** Mint a hand-off consent code. Grant access with a circle or `grant set` first. Omit contactPath when People already remembers the recipient. */
     async inviteReader(database, recipient) {
       const args = [`--name=${recipient.name}`];
       if (recipient.contactPath !== undefined) args.push(`--contact=${recipient.contactPath}`);
-      return parseInvitation(await run(['invite'], [...args, '--', database, recipient.nodeKey]));
+      return parseConsent(await run(['invite'], [...args, '--', database, recipient.nodeKey]));
     },
 
-    /** Seal an invitation for a verified contact with an existing whole-database grant. */
+    /** Mint a consent code for a verified contact with an existing whole-database grant. */
     async sealInvitation(databaseId, nodeKey) {
-      const result = parseInvitation(await run(['invite'], ['--', databaseId, nodeKey]));
+      const result = parseConsent(await run(['invite'], ['--', databaseId, nodeKey]));
       if (result.databaseId !== databaseId) {
-        throw invalid('People returned an invitation for a different database');
+        throw invalid('People returned a consent code for a different database');
       }
       return result;
     },
 
-    /** Accept using the independently verified publisher key. */
+    /** Accept a consent code using the independently verified publisher key. */
     async acceptInvitation(invitation, publisherKey, name) {
       const args = [`--publisher=${publisherKey}`];
       if (name !== undefined) args.push(`--name=${name}`);
-      const database = parseDatabase(await run(['db', 'accept'], args, invitation));
-      if (database.id !== invitation.databaseId) {
+      const code = typeof invitation === 'string' ? invitation : invitation.consent;
+      const expectedId = typeof invitation === 'object' && invitation ? invitation.databaseId : undefined;
+      const database = parseDatabase(await run(['db', 'accept'], args, code));
+      if (expectedId !== undefined && database.id !== expectedId) {
         throw invalid('People accepted a different database');
       }
       return database;
@@ -162,19 +164,20 @@ function parseSharingStatus(value, expectedId) {
   throw invalid('People returned invalid sharing status');
 }
 
-function parseInvitation(result) {
+function parseConsent(result) {
   if (isObject(result)) {
-    const { databaseId, entryHash, writerSeq, publisher, invitation } = result;
+    const { databaseId, entryHash, writerSeq, publisher, consent } = result;
     if (isHex32(databaseId) && typeof entryHash === 'string'
-      && typeof publisher === 'string' && typeof invitation === 'string' && invitation.length > 0
+      && typeof publisher === 'string' && typeof consent === 'string'
+      && consent.startsWith('people-consent-v1.')
       && (writerSeq === undefined || typeof writerSeq === 'number')) {
       return {
-        databaseId, entryHash, publisher, invitation,
+        databaseId, entryHash, publisher, consent,
         ...(writerSeq === undefined ? {} : { writerSeq }),
       };
     }
   }
-  throw invalid('People returned an invalid invitation receipt');
+  throw invalid('People returned an invalid consent receipt');
 }
 
 function parseSetup(result, request) {

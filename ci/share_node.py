@@ -1,9 +1,9 @@
 """Owner-socket steps the People command does not provide.
 
-People grants, revokes, seals invitations, and accepts them on the signed
-chain. These helpers still cover open-link mint/accept, proposal submit, and
-direct writes on the owner socket. They never print a link, a key, or a
-credential. Snapshots and unsigned share-config settings are gone.
+People grants, revokes, and mints consent codes on the signed chain. These
+helpers cover proposal submit and direct writes on the owner socket. They
+never print a key or a credential. ExeMem share_link / share-config paths are
+gone; open hand-off is a People consent code.
 """
 
 import json
@@ -150,26 +150,6 @@ def revoke_public_read(node, database):
     if status == 400 and b"public read cannot be revoked" in raw:
         return
     pinned("revoke_any_refused", status, raw)
-
-
-def mint_link(node, database):
-    status, raw = exchange(node, "POST", f"/api/databases/{database}/share/link", empty=True)
-    if status != 200:
-        pinned("share_link", status, raw)
-    value = decoded(status, raw, "share_link")
-    token = value.get("link")
-    require(value.get("databaseId") == database and isinstance(token, str)
-            and token.startswith("lastdb-read-v1."), "share_link")
-    return token
-
-
-def accept_link(node, token, name):
-    status, raw = exchange(node, "POST", "/api/databases/accept", {"link": token, "name": name})
-    if status != 200:
-        pinned("share_accept_link", status, raw)
-    database = decoded(status, raw, "share_accept_link").get("database")
-    require(isinstance(database, dict) and database.get("sharingMode") == "whole_database", "share_accept_link")
-    return database
 
 
 def declare(node, database):

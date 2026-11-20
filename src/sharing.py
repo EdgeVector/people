@@ -4,6 +4,10 @@ People asks LastDB to author grant and revoke entries. The signed chain is
 the only authority. People may carry signed heads for comparison and
 bootstrap the first relay URL from a publisher-signed relays entry. A grant
 that exists only in People is never treated as access.
+
+Invites are People consent codes: a hand-off string the publisher mints after
+a chain grant, and the recipient pastes into their People app. ExeMem and the
+relay never see an invite; they only see signed grant entries on the chain.
 """
 
 from __future__ import annotations
@@ -13,6 +17,7 @@ import http.client
 import json
 import uuid
 
+from consent import OPEN_PREFIX, decode_consent, encode_consent, open_link_identity
 from lastdb import LastDBError, PeopleError, no_cloud_account, raise_chain_refusal
 
 
@@ -264,24 +269,48 @@ class Sharing:
             raise_chain_refusal(error)
             raise
 
-    def seal(self, database_id, node_key, contact_code, tip, publisher):
-        response = self.chain_call(lambda: self.node.databases(
-            "invite", database=database_id, contactCode=contact_code, expectedNodeKey=node_key))
-        if response["databaseId"] != database_id or not response.get("invitation"):
-            raise PeopleError("LastDB returned a mismatched invitation")
-        return {"databaseId": database_id, "entryHash": tip["entryHash"],
-                "writerSeq": tip.get("writerSeq"), "publisher": publisher,
-                "invitation": response["invitation"]}
+    def mint_consent(self, database_id, tip, publisher):
+        """Mint a People consent code. LastDB only supplies the open-link material."""
+        response = self.chain_call(lambda: self.node.databases("share_link", database=database_id))
+        link = response.get("link")
+        if (response.get("databaseId") != database_id or not isinstance(link, str)
+                or not link.startswith(OPEN_PREFIX)):
+            raise PeopleError("LastDB returned a mismatched open link")
+        payload = {
+            "v": 1,
+            "databaseId": database_id,
+            "publisher": publisher,
+            "entryHash": tip["entryHash"],
+            "open": link,
+        }
+        if "writerSeq" in tip:
+            payload["writerSeq"] = tip["writerSeq"]
+        return {
+            "databaseId": database_id,
+            "entryHash": tip["entryHash"],
+            "writerSeq": tip.get("writerSeq"),
+            "publisher": publisher,
+            "consent": encode_consent(payload),
+        }
 
-    def accept(self, receipt, publisher, name):
-        if receipt.get("publisher") != publisher:
-            raise PeopleError("invitation publisher differs from the trusted publisher")
+    def accept(self, consent, publisher, name):
+        payload = decode_consent(consent)
+        # The consent wrapper is unsigned. Trust only the open-link publisher and
+        # the independently verified --publisher key, then the registration reply.
+        link_publisher, link_database = open_link_identity(payload["open"])
+        if link_publisher != publisher:
+            raise PeopleError("open link publisher differs from the trusted publisher")
+        if link_database != payload["databaseId"]:
+            raise PeopleError("open link database differs from the consent code")
         database = self.chain_call(lambda: self.node.databases(
-            "accept", invitation=receipt["invitation"], publisher=publisher,
-            database_id=receipt["databaseId"], name=name))["database"]
+            "accept", link=payload["open"], name=name))["database"]
+        if database.get("id") != payload["databaseId"]:
+            raise PeopleError("LastDB accepted a different database")
+        if database.get("publisher") != publisher:
+            raise PeopleError("accepted database publisher differs from the trusted publisher")
         # Member discovers the first relay from the publisher-signed relays entry.
         try:
-            self.bootstrap_relay(receipt["databaseId"])
+            self.bootstrap_relay(payload["databaseId"])
         except LastDBError as error:
             if not no_cloud_account(error):
                 raise
@@ -300,13 +329,3 @@ def checked_ack(ack, database_id, role):
 def tip_receipt(current, node_key, role):
     return {"databaseId": current["databaseId"], "entryHash": current.get("entryHash"),
             "writerSeq": current.get("writerSeq"), "nodeKey": node_key, "role": role}
-
-
-def read_invitation(stream):
-    raw = stream.read(8193)
-    if len(raw) > 8192:
-        raise PeopleError("invitation receipt exceeds its size limit")
-    value = json.loads(raw)
-    if not isinstance(value, dict):
-        raise PeopleError("expected a People invitation receipt")
-    return value

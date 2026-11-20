@@ -29,15 +29,16 @@ export interface PeopleDatabase {
   [field: string]: unknown;
 }
 
-/** A sealed invitation for the caller to hand to the verified recipient. */
+/** A hand-off consent code for the caller to paste into the recipient's People app. */
 export interface PeopleInvitation {
   /** Hex32 database id (64 lowercase hex). */
   databaseId: string;
-  /** Tip of the publisher grant chain when the invitation was sealed. */
+  /** Tip of the publisher grant chain when the consent code was minted. */
   entryHash: string;
   writerSeq?: number;
   publisher: string;
-  invitation: string;
+  /** Opaque `people-consent-v1.` code. ExeMem never sees this. */
+  consent: string;
 }
 
 /** Provision by a new local name or verify an explicitly selected database. */
@@ -95,16 +96,16 @@ export interface PeopleClient {
   createSharedDatabase(name: string): Promise<PeopleDatabase>;
   /** Open a versioned database setup using People's catalog. */
   setupDatabase(request: PeopleSetupRequest): Promise<PeopleDatabaseSetup>;
-  /** Seal an invitation. Grant access with a circle or `grant set` first. Omit contactPath when People already remembers the recipient. */
+  /** Mint a consent code. Grant access with a circle or `grant set` first. Omit contactPath when People already remembers the recipient. */
   inviteReader(database: string, recipient: {
     name: string;
     nodeKey: string;
     contactPath?: string;
   }): Promise<PeopleInvitation>;
-  /** Seal an invitation for a verified contact with an existing whole-database grant. */
+  /** Mint a consent code for a verified contact with an existing whole-database grant. */
   sealInvitation(databaseId: string, nodeKey: string): Promise<PeopleInvitation>;
-  /** Accept using the independently verified publisher key. */
-  acceptInvitation(invitation: PeopleInvitation, publisherKey: string, name?: string): Promise<PeopleDatabase>;
+  /** Accept a consent code (or receipt containing `consent`) using the independently verified publisher key. */
+  acceptInvitation(invitation: PeopleInvitation | string, publisherKey: string, name?: string): Promise<PeopleDatabase>;
   /** Revoke a person's grant and return the signed chain entry hash. */
   revokeAccess(database: string, nodeKey: string): Promise<string>;
 }

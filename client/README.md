@@ -10,7 +10,7 @@ to. With People installed from the app registry, the package is the `client`
 folder of the installed source: `<apps root>/people/current/source/client`.
 Import it from there, or copy the folder into your app.
 
-People manages verified contacts, reusable circles, and invitations. For
+People manages verified contacts, reusable circles, and consent-code invites. For
 schemas, records, and files, use `connect` and `select` from `@lastdb/app-sdk`.
 Point both at the same LastDB home. The publisher needs a connected ExeMem
 account.
@@ -22,8 +22,8 @@ account.
 | `getSharingStatus(requestId)` | `people request status ID` |
 | `createSharedDatabase(name)` | `people db create NAME` |
 | `setupDatabase(request)` | `people db create --setup ...` or `people db verify ...` |
-| `sealInvitation(databaseId, nodeKey)` | `people invite DATABASE PERSON` |
-| `acceptInvitation(invitation, publisherKey, name?)` | `people db accept`, with the invitation on standard input |
+| `sealInvitation(databaseId, nodeKey)` | `people invite DATABASE PERSON` (consent code) |
+| `acceptInvitation(consent, publisherKey, name?)` | `people db accept`, with the consent code on standard input |
 | `revokeAccess(database, nodeKey)` | `people grant revoke --apply DATABASE PERSON` |
 | `inviteReader(database, recipient)` | `people invite --name ... DATABASE PERSON` |
 
@@ -169,5 +169,5 @@ schemas after checking compatibility.
 
 Grant access with a circle or `people grant set` before sealing. Then
 `people.inviteReader(database, { name, nodeKey, contactPath })` or
-`people.sealInvitation(databaseId, nodeKey)` returns a sealed invitation.
-People reuses verified contacts, so later invitations can omit `contactPath`.
+`people.sealInvitation(databaseId, nodeKey)` returns a People consent code.
+People reuses verified contacts, so later consent codes can omit `contactPath`.

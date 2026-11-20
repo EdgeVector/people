@@ -55,8 +55,8 @@ COMMANDS = {
             flag("--finish", action="store_true", help="Install missing setup schemas in an owned database"))),
         "list": ("List owned and received databases", ()),
         "show": ("Show one database, its roster and any pending change", (DATABASE,)),
-        "accept": ("Accept a sealed invitation", (
-            flag("receipt", nargs="?", help="Invitation file. Default: read standard input"),
+        "accept": ("Accept a People consent code", (
+            flag("receipt", nargs="?", help="Consent file. Default: read standard input"),
             flag("--publisher", required=True, help="Independently verified publisher node key"),
             flag("--name", help="Local database name"))),
         "retry": ("Resume unfinished sharing updates", (
@@ -70,10 +70,13 @@ COMMANDS = {
             DATABASE, PERSON, WRITE, RESOLVE, *APPLY)),
         "revoke": ("Revoke a person's access", (DATABASE, PERSON, APPLY[0])),
     }),
-    "invite": ("Seal an invitation for a person with an existing grant", (
-        DATABASE, PERSON, flag("--name", help="Contact name, with --contact"),
+    "invite": ("Mint a hand-off consent code after a chain grant", (
+        DATABASE, flag("person", nargs="?", help="Saved contact name, or node key"),
+        flag("--open", action="store_true",
+             help="Mint a Deliver consent code (grant#any); do not name a person"),
+        flag("--name", help="Contact name, with --contact"),
         flag("--contact", type=Path, help="Contact file for a new or updated contact"),
-        flag("--out", type=Path, help="Write the sealed receipt to this file, readable by you only"))),
+        flag("--out", type=Path, help="Write the consent code to this file, readable by you only"))),
     "request": ("Sharing changes proposed by apps", {
         "submit": ("Save a JSON declaration from standard input for owner review", ()),
         "status": ("Read the outcome of a proposal", (flag("request_id"),)),

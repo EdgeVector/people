@@ -91,11 +91,11 @@ class PeopleApp:
     def setup_database(self, args):
         return self.setups.open(args)
 
-    def accept(self, receipt, publisher, name):
+    def accept(self, consent, publisher, name):
         require_node_key(publisher)
-        if not isinstance(receipt, dict):
-            raise PeopleError("enter the sealed invitation receipt")
-        return self.sharing.accept(receipt, publisher, checked_name(name) if name else None)
+        if not isinstance(consent, str) or not consent:
+            raise PeopleError("enter the People consent code")
+        return self.sharing.accept(consent, publisher, checked_name(name) if name else None)
 
     def home(self):
         databases = [row for row in self.sharing.databases() if row.get("spec")]
@@ -174,19 +174,26 @@ class PeopleApp:
             "pending": [database for database in pending if database in circle["links"]],
         }
 
-    def seal(self, database, node_key):
-        """Seal an invitation for an active grant on an owned whole-database share."""
+    def invite_consent(self, database, node_key):
+        """Mint a hand-off consent code for an active grant on an owned share."""
         person = self.people.by_keys([node_key]).get(node_key)
         if person is None:
             raise PeopleError("save this person's verified contact first")
         config = self.sharing.configuration(database["id"])
         if not any(row["nodeKey"] == node_key and row["state"] == "active" for row in config["members"]):
-            raise PeopleError("grant access with a circle or `people grant set` before sealing an invitation")
+            raise PeopleError("grant access with a circle or `people grant set` before inviting")
         if not isinstance(config.get("entryHash"), str) or not config["entryHash"]:
             raise PeopleError("grant chain tip is missing; retry after the grant is confirmed")
         tip = {key: config[key] for key in ("entryHash", "writerSeq") if key in config}
-        return self.sharing.seal(database["id"], node_key, person["contact_code"], tip,
-                                 self.node.own_key())
+        return self.sharing.mint_consent(database["id"], tip, self.node.own_key())
+
+    def open_consent(self, database):
+        """Mint a consent code for Deliver (grant#any) or any owned shareable database."""
+        config = self.sharing.configuration(database["id"])
+        if not isinstance(config.get("entryHash"), str) or not config["entryHash"]:
+            raise PeopleError("grant chain tip is missing; retry after the grant is confirmed")
+        tip = {key: config[key] for key in ("entryHash", "writerSeq") if key in config}
+        return self.sharing.mint_consent(database["id"], tip, self.node.own_key())
 
     def selected(self, selector, rows=None):
         rows = self.sharing.databases() if rows is None else rows

@@ -21,11 +21,11 @@ name: DEV sharing
 # privileged main job.
 #
 # LastDB build under test:
-# - Empty inputs → pin b60af78f… (lastdb #1811 squash on main: local open-link /
-#   no ExeMem invite) until a post-#1811 nightly is selected via lastdb_release.
+# - Empty inputs → pin 262a9522… (lastdb #1812 squash on main: received
+#   signed-log pull + open-link device_id) until a newer nightly via lastdb_release.
 # - lastdb_release → that nightly tag.
 # - lastdb_source_sha → build lastdb/lastdbd from that exact public commit
-#   (default: the #1811 squash on main).
+#   (default: the #1812 squash on main).
 # lastdb_release and lastdb_source_sha are mutually exclusive.
 #
 # new-nightly selects the LastDB build. A sharing job records that it started
@@ -58,7 +58,7 @@ on:
       lastdb_source_sha:
         description: "Pin a 40-hex LastDB commit (must include #1805 UDS). Builds binaries from that SHA. Mutually exclusive with lastdb_release"
         type: string
-        default: "b60af78fe91457a7688aa3c4691a02b5c8eee7b7"
+        default: "262a95226ec24ba2ff1097159230f7e5aa5c8fa1"
       relay_url:
         description: "ExeMem DEV relay origin (https://….execute-api….amazonaws.com), no /relay path and no credentials. Empty uses environments.dev.exemem_api from the LastDB source under test"
         type: string
@@ -140,9 +140,9 @@ jobs:
           set -euo pipefail
           release="${LASTDB_RELEASE:-}"
           sha="${LASTDB_SOURCE_SHA:-}"
-          # #1805 merge on main. Used when neither a release nor an explicit SHA
-          # is set, so DEV sharing does not fall back to a pre-UDS nightly.
-          default_sha="b60af78fe91457a7688aa3c4691a02b5c8eee7b7"
+          # #1812 squash on main (received pull + open-link device_id). Used when
+          # neither a release nor an explicit SHA is set.
+          default_sha="262a95226ec24ba2ff1097159230f7e5aa5c8fa1"
           if [ -n "$release" ] && [ -n "$sha" ]; then
             echo "lastdb_release and lastdb_source_sha are mutually exclusive" >&2
             exit 2

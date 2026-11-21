@@ -21,11 +21,12 @@ name: DEV sharing
 # privileged main job.
 #
 # LastDB build under test:
-# - Empty inputs → pin 30ecb6aa… (lastdb #1814 squash on main: owned writes
-#   mirrored to signed outbox; includes #1813 revoked grants + #1812 pull) until a newer nightly.
+# - Empty inputs → pin ee755ada… (lastdb #1815 squash on main: upload owned
+#   outboxes before stream pulls so personal log/read 403 does not block
+#   shareable birth/grant upload; includes #1814/#1813/#1812) until a newer nightly.
 # - lastdb_release → that nightly tag.
 # - lastdb_source_sha → build lastdb/lastdbd from that exact public commit
-#   (default: the #1814 squash on main).
+#   (default: the #1815 squash on main).
 # lastdb_release and lastdb_source_sha are mutually exclusive.
 #
 # new-nightly selects the LastDB build. A sharing job records that it started
@@ -58,7 +59,7 @@ on:
       lastdb_source_sha:
         description: "Pin a 40-hex LastDB commit (must include #1805 UDS). Builds binaries from that SHA. Mutually exclusive with lastdb_release"
         type: string
-        default: "30ecb6aac053227a3fc89ffa9e5e02c348c72c59"
+        default: "ee755ada351a01de4524c056406a954a8c2e82f1"
       relay_url:
         description: "ExeMem DEV relay origin (https://….execute-api….amazonaws.com), no /relay path and no credentials. Empty uses environments.dev.exemem_api from the LastDB source under test"
         type: string
@@ -140,9 +141,9 @@ jobs:
           set -euo pipefail
           release="${LASTDB_RELEASE:-}"
           sha="${LASTDB_SOURCE_SHA:-}"
-          # #1814 squash on main (owned write → signed outbox; includes #1813/#1812).
+          # #1815 squash on main (upload before pull; includes #1814/#1813/#1812).
           # Used when neither a release nor an explicit SHA is set.
-          default_sha="30ecb6aac053227a3fc89ffa9e5e02c348c72c59"
+          default_sha="ee755ada351a01de4524c056406a954a8c2e82f1"
           if [ -n "$release" ] && [ -n "$sha" ]; then
             echo "lastdb_release and lastdb_source_sha are mutually exclusive" >&2
             exit 2

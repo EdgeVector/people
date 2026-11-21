@@ -21,12 +21,12 @@ name: DEV sharing
 # privileged main job.
 #
 # LastDB build under test:
-# - Empty inputs → pin f6433d3c… (lastdb #1817: reload disk outbox on
-#   authored replay; includes #1816/#1815/#1814/#1813/#1812) until a newer
-#   nightly.
+# - Empty inputs → pin 20559c69… (lastdb #1819: skip personal pull_owned;
+#   clear cloud_sync.last_error on Ok turn; includes #1817/#1816/…/#1812)
+#   until a newer nightly.
 # - lastdb_release → that nightly tag.
 # - lastdb_source_sha → build lastdb/lastdbd from that exact public commit
-#   (default: the #1817 squash).
+#   (default: the #1819 squash).
 # lastdb_release and lastdb_source_sha are mutually exclusive.
 #
 # new-nightly selects the LastDB build. A sharing job records that it started
@@ -59,7 +59,7 @@ on:
       lastdb_source_sha:
         description: "Pin a 40-hex LastDB commit (must include #1805 UDS). Builds binaries from that SHA. Mutually exclusive with lastdb_release"
         type: string
-        default: "f6433d3c5c0832452e8c0591608b3b6e6d2cc4da"
+        default: "20559c69ccef32c4129070a37a97e6ec20fc9cc4"
       relay_url:
         description: "ExeMem DEV relay origin (https://….execute-api….amazonaws.com), no /relay path and no credentials. Empty uses environments.dev.exemem_api from the LastDB source under test"
         type: string
@@ -141,9 +141,10 @@ jobs:
           set -euo pipefail
           release="${LASTDB_RELEASE:-}"
           sha="${LASTDB_SOURCE_SHA:-}"
-          # #1817 squash (reload outbox on replay; includes #1816…#1812).
-          # Used when neither a release nor an explicit SHA is set.
-          default_sha="f6433d3c5c0832452e8c0591608b3b6e6d2cc4da"
+          # #1819 squash (skip personal pull_owned; clear last_error on Ok;
+          # includes #1817…#1812). Used when neither a release nor an explicit
+          # SHA is set.
+          default_sha="20559c69ccef32c4129070a37a97e6ec20fc9cc4"
           if [ -n "$release" ] && [ -n "$sha" ]; then
             echo "lastdb_release and lastdb_source_sha are mutually exclusive" >&2
             exit 2

@@ -21,11 +21,11 @@ name: DEV sharing
 # privileged main job.
 #
 # LastDB build under test:
-# - Empty inputs → pin 262a9522… (lastdb #1812 squash on main: received
-#   signed-log pull + open-link device_id) until a newer nightly via lastdb_release.
+# - Empty inputs → pin cf1ab105… (lastdb #1813 squash on main: revoked rows
+#   kept in GrantState; includes #1812 received pull) until a newer nightly.
 # - lastdb_release → that nightly tag.
 # - lastdb_source_sha → build lastdb/lastdbd from that exact public commit
-#   (default: the #1812 squash on main).
+#   (default: the #1813 squash on main).
 # lastdb_release and lastdb_source_sha are mutually exclusive.
 #
 # new-nightly selects the LastDB build. A sharing job records that it started
@@ -58,7 +58,7 @@ on:
       lastdb_source_sha:
         description: "Pin a 40-hex LastDB commit (must include #1805 UDS). Builds binaries from that SHA. Mutually exclusive with lastdb_release"
         type: string
-        default: "262a95226ec24ba2ff1097159230f7e5aa5c8fa1"
+        default: "cf1ab105a520ffe767f9d69a2125c599ad254ef7"
       relay_url:
         description: "ExeMem DEV relay origin (https://….execute-api….amazonaws.com), no /relay path and no credentials. Empty uses environments.dev.exemem_api from the LastDB source under test"
         type: string
@@ -140,9 +140,9 @@ jobs:
           set -euo pipefail
           release="${LASTDB_RELEASE:-}"
           sha="${LASTDB_SOURCE_SHA:-}"
-          # #1812 squash on main (received pull + open-link device_id). Used when
-          # neither a release nor an explicit SHA is set.
-          default_sha="262a95226ec24ba2ff1097159230f7e5aa5c8fa1"
+          # #1813 squash on main (revoked grants visible; includes #1812 pull).
+          # Used when neither a release nor an explicit SHA is set.
+          default_sha="cf1ab105a520ffe767f9d69a2125c599ad254ef7"
           if [ -n "$release" ] && [ -n "$sha" ]; then
             echo "lastdb_release and lastdb_source_sha are mutually exclusive" >&2
             exit 2

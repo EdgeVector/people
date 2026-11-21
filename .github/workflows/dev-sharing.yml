@@ -21,7 +21,7 @@ name: DEV sharing
 # privileged main job.
 #
 # LastDB build under test:
-# - Empty inputs → pin 3b8322a2… (lastdb #1817: reload disk outbox on
+# - Empty inputs → pin f6433d3c… (lastdb #1817: reload disk outbox on
 #   authored replay; includes #1816/#1815/#1814/#1813/#1812) until a newer
 #   nightly.
 # - lastdb_release → that nightly tag.

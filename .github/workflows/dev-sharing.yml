@@ -300,10 +300,13 @@ jobs:
       - name: Upload LastDB binaries
         uses: actions/upload-artifact@v4
         with:
-          name: lastdb-bin-${{ github.run_id }}-${{ github.run_attempt }}
+          # run_id only: a partial "Re-run failed jobs" increments run_attempt
+          # while leaving build-lastdb alone, so attempt-suffixed names miss.
+          name: lastdb-bin-${{ github.run_id }}
           path: ${{ runner.temp }}/lastdb-bin/
           if-no-files-found: error
           retention-days: 1
+          overwrite: true
 
   sharing:
     name: ${{ matrix.mode }} in DEV
@@ -443,7 +446,7 @@ jobs:
         if: env.BUILD_MODE == 'source'
         uses: actions/download-artifact@v4
         with:
-          name: lastdb-bin-${{ github.run_id }}-${{ github.run_attempt }}
+          name: lastdb-bin-${{ github.run_id }}
           path: ${{ runner.temp }}/lastdb-bin
       - name: Install downloaded LastDB binaries
         if: env.BUILD_MODE == 'source'

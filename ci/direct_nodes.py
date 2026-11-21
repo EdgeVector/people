@@ -17,11 +17,13 @@ from node import Connection
 from support import OperationError, decode_json, redact_secrets
 
 
-DATABASE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+# Signed-history database ids are Hex32 (64 lowercase hex), not UUIDs.
+DATABASE_ID = re.compile(r"[0-9a-f]{64}")
 LOG_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
+# PrivateFormat strips messages; match severity= so WARN turns still count.
 # HTTP statuses are bounded so a timestamp does not match 4xx or 5xx.
 LOG_HINT = re.compile(
-    r"log-sync|append|received|retry|unauthorized|error|(?<![0-9])[45][0-9]{2}(?![0-9])",
+    r"severity=|log-sync|append|received|retry|unauthorized|error|(?<![0-9])[45][0-9]{2}(?![0-9])",
     re.IGNORECASE,
 )
 FILE_NAME = re.compile(r"[A-Za-z0-9._-]{1,40}")
@@ -38,14 +40,23 @@ def node_dump(roster, database):
 
 
 def compact_node(name, node, database):
-    # Four nodes have to fit in the 300 characters attach keeps for the dump.
-    return ("%s %s" % (name, node_entry(node, database)))[:72]
+    # Keep publisher last_error and Hex32 disk bits; attach() still clips the dump.
+    return ("%s %s" % (name, node_entry(node, database)))[:120]
 
 
 def node_entry(node, database):
     if not live(node):
         return "%s sync=down ops=down" % files_text(node, database)
     return "%s %s %s" % (files_text(node, database), ops_text(node), sync_text(node, database))
+
+
+def grant_state(publisher, reader, database):
+    """Local outbox + cloud last_error beside a relay 403 field=grant."""
+    return "grant-state pub=%s rdr=%s disk=%s" % (
+        clip_public(sync_text(publisher, database), 160),
+        clip_public(sync_text(reader, database), 160),
+        files_text(publisher, database),
+    )
 
 
 def live(node):
@@ -142,22 +153,28 @@ def files_text(node, database):
     if not isinstance(database, str) or not DATABASE_ID.fullmatch(database):
         return "files=-"
     root = Path(node.home) / "log-sync" / database
-    return "files=%s/%s/%s" % (
-        num(json_int(root / "session.json", "cursor")),
-        num(json_int(root / "prefix.json", "through")),
-        error_bits(root))
+    birth = "birth" if (root / "birth.json").is_file() else "-"
+    return "files=%s/%s/%s" % (birth, outbox_text(root / "outbox.json"), error_bits(root))
 
 
-def json_int(path, field):
-    raw = read_limited(path, 4096)
+def outbox_text(path):
+    raw = read_limited(path, 256 * 1024)
     if raw is None:
-        return None
+        return "outbox=-"
     try:
-        value = decode_json(raw)
+        entries = decode_json(raw)
     except OperationError:
-        return None
-    item = value.get(field) if isinstance(value, dict) else None
-    return item if type(item) is int else None
+        return "outbox=bad"
+    if not isinstance(entries, list):
+        return "outbox=bad"
+    if not entries:
+        return "outbox=0"
+    kinds = []
+    for entry in entries[:8]:
+        kind = entry.get("kind") if isinstance(entry, dict) else None
+        kinds.append(kind if isinstance(kind, str) and kind else "?")
+    extra = "" if len(entries) <= 8 else "+%s" % (len(entries) - 8)
+    return "outbox=%s:%s%s" % (len(entries), ",".join(kinds), extra)
 
 
 def error_bits(directory):
@@ -244,6 +261,12 @@ def failure_evidence(roster, database):
         cloud = "Ana cloud=unread"
     if cloud:
         parts.append(cloud)
+    try:
+        by_name = {name: node for name, node in roster}
+        if "publisher" in by_name and "Ana" in by_name:
+            parts.append(grant_state(by_name["publisher"], by_name["Ana"], database))
+    except Exception:
+        parts.append("grant-state=failed")
     return "\n".join(parts)[:48000]
 
 
@@ -302,12 +325,10 @@ def tail_bytes(path, limit):
 
 def sync_files(node, database):
     if not isinstance(database, str) or not DATABASE_ID.fullmatch(database):
-        return "session=- prefix=- error=-"
+        return "birth=- outbox=- error=-"
     root = Path(node.home) / "log-sync" / database
-    parts = [
-        "session=%s" % small_text(root / "session.json", 4096),
-        "prefix=%s" % small_text(root / "prefix.json", 4096),
-    ]
+    birth = "birth=yes" if (root / "birth.json").is_file() else "birth=-"
+    parts = [birth, outbox_text(root / "outbox.json")]
     parts.extend(error_files(root))
     return " ".join(parts)
 

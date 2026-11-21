@@ -147,12 +147,13 @@ function parseDatabase(value) {
 
 function parseSharingStatus(value, expectedId) {
   if (isObject(value)) {
-    const { requestId, databaseId, status, entryHash, writerSeq, error } = value;
+    const { requestId, databaseId, status, error } = value;
+    // Policy-only confirms (empty circle, no grant yet) have no chain tip.
+    // Null tip fields are omitted the same way as missing ones.
+    const entryHash = typeof value.entryHash === 'string' ? value.entryHash : undefined;
+    const writerSeq = typeof value.writerSeq === 'number' ? value.writerSeq : undefined;
     if (requestId === expectedId && isHex32(databaseId) && STATUSES.includes(status)
-      && (entryHash === undefined || typeof entryHash === 'string')
-      && (writerSeq === undefined || typeof writerSeq === 'number')
-      && (error === undefined || typeof error === 'string')
-      && (status !== 'confirmed' || typeof entryHash === 'string')) {
+      && (error === undefined || typeof error === 'string')) {
       return {
         requestId, databaseId, status,
         ...(entryHash === undefined ? {} : { entryHash }),

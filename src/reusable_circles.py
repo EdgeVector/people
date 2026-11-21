@@ -125,7 +125,7 @@ class ReusableCircles:
             if operation and operation["status"] != "confirmed":
                 receipt = {key: outcome[key]
                            for key in ("databaseId", "status", "entryHash", "writerSeq", "error")
-                           if key in outcome}
+                           if key in outcome and outcome[key] is not None}
                 operations[database] = {"requestId": operation["requestId"], **receipt}
                 if outcome["status"] != "confirmed" and "direct" in operation:
                     operations[database]["direct"] = operation["direct"]
@@ -200,8 +200,9 @@ class ReusableCircles:
             return {**row, "error": plan["error"], "status": "pending"}
         try:
             result = self.circles.apply(row["databaseId"], plan)
-            return {**row, "entryHash": result.get("entryHash"), "writerSeq": result.get("writerSeq"),
-                    "status": "confirmed"}
+            tip = {key: result[key] for key in ("entryHash", "writerSeq")
+                   if isinstance(result.get(key), (str, int))}
+            return {**row, **tip, "status": "confirmed"}
         except (PeopleError, OSError, HTTPException) as error:
             return {**row, "error": str(error), "status": "pending"}
 

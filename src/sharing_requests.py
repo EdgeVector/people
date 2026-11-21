@@ -243,7 +243,8 @@ def status(declaration, receipt=None):
     result = {"requestId": declaration["requestId"], "appId": declaration["appId"],
               "databaseId": change["databaseId"], "change": change, "status": "awaitingApproval"}
     if receipt:
-        result.update({key: receipt[key]
-                       for key in ("status", "entryHash", "writerSeq", "error")
-                       if key in receipt})
+        # Omit null tip fields: empty-circle confirms have no grant tip yet.
+        for key in ("status", "entryHash", "writerSeq", "error"):
+            if key in receipt and receipt[key] is not None:
+                result[key] = receipt[key]
     return result

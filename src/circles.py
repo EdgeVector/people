@@ -108,9 +108,11 @@ class Circles:
             receipt = self.sharing.apply_ops(database, plan["ops"], plan["policy"])
         else:
             store_policy(self.node, database, plan["policy"])
-            receipt = {"entryHash": plan.get("entryHash"), "writerSeq": plan.get("writerSeq")}
-        return {"entryHash": receipt.get("entryHash"), "writerSeq": receipt.get("writerSeq"),
-                "circles": plan["policy"]["circles"]}
+            receipt = {key: plan[key] for key in ("entryHash", "writerSeq")
+                       if isinstance(plan.get(key), (str, int))}
+        tip = {key: receipt[key] for key in ("entryHash", "writerSeq")
+               if isinstance(receipt.get(key), (str, int))}
+        return {**tip, "circles": plan["policy"]["circles"]}
 
     @contextmanager
     def lock(self):

@@ -35,23 +35,27 @@ def wait_for_album(node, database, index):
     stage = f"people_album_{index}"
 
     def load():
-        rows = album(node, database, index)
-        sample = {"rows": rows, "count": len(rows) if isinstance(rows, list) else None}
+        sample = {}
+        try:
+            rows = album(node, database, index)
+            sample["rows"] = rows
+            sample["count"] = len(rows) if isinstance(rows, list) else None
+        except Exception as error:
+            sample["read"] = "%s:%s" % (type(error).__name__, error)
         try:
             sharing = people(node, "db", "show", database).get("sharing")
-        except OperationError as error:
-            sample["show"] = str(error)
-            return sample
-        if isinstance(sharing, dict):
-            sample["members"] = sharing.get("members")
-            sample["writerSeq"] = sharing.get("writerSeq")
-            sample["entryHash"] = sharing.get("entryHash")
-            sample["status"] = sharing.get("status")
+            if isinstance(sharing, dict):
+                sample["members"] = sharing.get("members")
+                sample["writerSeq"] = sharing.get("writerSeq")
+                sample["entryHash"] = sharing.get("entryHash")
+                sample["selfAccess"] = sharing.get("selfAccess")
+        except Exception as error:
+            sample["show"] = "%s:%s" % (type(error).__name__, error)
         try:
             from direct_nodes import sync_text
             sample["cloud"] = sync_text(node, database)
-        except OperationError as error:
-            sample["cloud"] = str(error)
+        except Exception as error:
+            sample["cloud"] = "%s:%s" % (type(error).__name__, error)
         return sample
 
     def matches(sample):

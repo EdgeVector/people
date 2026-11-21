@@ -161,7 +161,13 @@ function parseSharingStatus(value, expectedId) {
       };
     }
   }
-  throw invalid('People returned invalid sharing status');
+  let raw;
+  try {
+    raw = JSON.stringify(value);
+  } catch {
+    raw = String(value);
+  }
+  throw invalid(`People returned invalid sharing status: ${raw}`);
 }
 
 function parseConsent(result) {

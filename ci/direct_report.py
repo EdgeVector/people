@@ -137,13 +137,21 @@ def attach(error, roster, database, evidence=False):
         return
     dump = guarded(lambda: node_dump(roster, database)[:300], "dump=failed")
     text = existing + MARKER + dump if existing else "nodes=" + dump
+    grant_lines = guarded(lambda: _grant_403_lines(roster), "")
     if not evidence:
-        # Keep relay last_error and raw SDK status bodies readable.
-        error.command_output = (text[:2000], "")
+        # Full grant-403 JSON at the end so failure()'s tail clip keeps it.
+        if grant_lines:
+            text = text + "\n" + grant_lines
+        error.command_output = (text[-8000:] if len(text) > 8000 else text, "")
         return
     text += "\npublish\n" + guarded(lambda: member_publish(roster, database), "publish=unread")
     text += "\ndirect-logs\n" + guarded(lambda: failure_evidence(roster, database), "evidence=failed")
     error.command_output = (text, "")
+
+
+def _grant_403_lines(roster):
+    from grant_probe import grant_403_roster
+    return grant_403_roster(roster)
 
 
 def safe_observe(observe):

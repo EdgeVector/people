@@ -111,7 +111,13 @@ def failure(error):
         # Other recipes stay on the short tail.
         # Direct evidence keeps the full dump. Other recipes keep enough for a
         # relay status+body and a raw sharing-status JSON (previously 600).
-        limit = 65536 if isinstance(raw, str) and "\ndirect-logs\n" in raw else 2000
+        # Grant-403 lines carry the full relay grant JSON; keep a longer tail.
+        if isinstance(raw, str) and "\ndirect-logs\n" in raw:
+            limit = 65536
+        elif isinstance(raw, str) and "grant-403 " in raw:
+            limit = 8000
+        else:
+            limit = 2000
         value["detail"] = redact_command_text(raw, limit)
     return value
 
@@ -235,6 +241,9 @@ def timeout_detail(last_error, last_value):
             if raw:
                 parts.append(redact_command_text(str(raw), 400))
     if last_value is not None:
+        if isinstance(last_value, dict) and isinstance(last_value.get("grant_403"), str):
+            # Full relay grant JSON on its own line (not clipped into last=).
+            parts.append(redact_secrets(last_value["grant_403"]))
         try:
             text = json.dumps(last_value, separators=(",", ":"), default=str)
         except (TypeError, ValueError):

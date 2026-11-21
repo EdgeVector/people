@@ -15,14 +15,21 @@ from support import OperationError, decode_json, redact_secrets
 
 
 def grant_state(publisher, reader, database):
-    """Local authored grants + outbox beside a relay 403; full grant JSON below."""
+    """Local authored grants + outbox beside a relay 403; full grant JSON below.
+
+    orphan= means authored birth/grant seqs absent from outbox.json — either
+    dropped before upload or removed after a relay append ack. Distinguish with
+    upload=spool_head/spool_confirmed_through (ack cursor) and outbox=kind@seq.
+    """
     parts = [
-        "grant-state pub=%s rdr=%s disk=%s authored=%s orphan=%s" % (
+        "grant-state pub=%s rdr=%s disk=%s authored=%s orphan=%s upload=%s outbox=%s" % (
             clip_public(sync_text(publisher, database), 200),
             clip_public(sync_text(reader, database), 200),
             files_text(publisher, database),
             authored_grants(publisher, database),
             orphan_authored(publisher, database),
+            spool_upload(publisher, database),
+            outbox_seqs(publisher, database),
         )
     ]
     upload = upload_error_line(publisher)
@@ -77,7 +84,7 @@ def upload_error_line(node):
 
 
 def orphan_authored(node, database):
-    """Birth/grant in authored.json but absent from outbox.json (wiped before upload)."""
+    """Birth/grant in authored.json but absent from outbox.json (drop or ack)."""
     authored = _kind_seqs(node, database, "authored.json")
     if authored is None:
         return "-"
@@ -88,6 +95,40 @@ def orphan_authored(node, database):
     if not missing:
         return "0"
     return ",".join(missing[:12]) + ("" if len(missing) <= 12 else "+%s" % (len(missing) - 12))
+
+
+def spool_upload(node, database):
+    """Publisher upload ack cursor: spool_head/spool_confirmed_through."""
+    if not isinstance(database, str) or not DATABASE_ID.fullmatch(database):
+        return "-/-"
+    cloud = cloud_sync(owner_status(node))
+    if not isinstance(cloud, dict):
+        return "unread/unread"
+    databases = cloud.get("databases")
+    if not isinstance(databases, dict) or database not in databases:
+        return "absent/absent"
+    item = databases[database]
+    if not isinstance(item, dict):
+        return "?/?"
+    upload = item.get("upload") if isinstance(item.get("upload"), dict) else {}
+    head = upload.get("spool_head")
+    confirmed = upload.get("spool_confirmed_through")
+    return "%s/%s" % (
+        head if type(head) is int else "-",
+        confirmed if type(confirmed) is int else "-",
+    )
+
+
+def outbox_seqs(node, database):
+    """Pending outbox birth/grant as kind@writer_seq (ack vs drop evidence)."""
+    pending = _kind_seqs(node, database, "outbox.json")
+    if pending is None:
+        return "-"
+    if not pending:
+        return "0"
+    parts = sorted(pending)
+    extra = "" if len(parts) <= 12 else "+%s" % (len(parts) - 12)
+    return ",".join(parts[:12]) + extra
 
 
 def _kind_seqs(node, database, name):

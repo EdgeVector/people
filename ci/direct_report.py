@@ -137,11 +137,11 @@ def attach(error, roster, database, evidence=False):
         return
     dump = guarded(lambda: node_dump(roster, database)[:300], "dump=failed")
     text = existing + MARKER + dump if existing else "nodes=" + dump
-    grant_lines = guarded(lambda: _grant_403_lines(roster), "")
+    probe = guarded(lambda: _grant_probe_lines(roster, database), "")
     if not evidence:
-        # Full grant-403 JSON at the end so failure()'s tail clip keeps it.
-        if grant_lines:
-            text = text + "\n" + grant_lines
+        # Orphan/upload + grant-403 at the end so failure()'s tail clip keeps them.
+        if probe:
+            text = text + "\n" + probe
         error.command_output = (text[-8000:] if len(text) > 8000 else text, "")
         return
     text += "\npublish\n" + guarded(lambda: member_publish(roster, database), "publish=unread")
@@ -149,9 +149,16 @@ def attach(error, roster, database, evidence=False):
     error.command_output = (text, "")
 
 
-def _grant_403_lines(roster):
-    from grant_probe import grant_403_roster
-    return grant_403_roster(roster)
+def _grant_probe_lines(roster, database):
+    from grant_probe import grant_403_roster, grant_state
+    by_name = {name: node for name, node in roster}
+    parts = []
+    if "publisher" in by_name and "Ana" in by_name:
+        parts.append(grant_state(by_name["publisher"], by_name["Ana"], database))
+    grant_lines = grant_403_roster(roster)
+    if grant_lines:
+        parts.append(grant_lines)
+    return "\n".join(parts)
 
 
 def safe_observe(observe):

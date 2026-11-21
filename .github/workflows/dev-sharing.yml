@@ -21,12 +21,12 @@ name: DEV sharing
 # privileged main job.
 #
 # LastDB build under test:
-# - Empty inputs → pin 009d853b… (lastdb #1816 squash on main: drain every
-#   outbox batch before stream pulls; includes #1815/#1814/#1813/#1812) until
-#   a newer nightly.
+# - Empty inputs → pin 3b8322a2… (lastdb #1817: reload disk outbox on
+#   authored replay; includes #1816/#1815/#1814/#1813/#1812) until a newer
+#   nightly.
 # - lastdb_release → that nightly tag.
 # - lastdb_source_sha → build lastdb/lastdbd from that exact public commit
-#   (default: the #1816 squash on main).
+#   (default: the #1817 head).
 # lastdb_release and lastdb_source_sha are mutually exclusive.
 #
 # new-nightly selects the LastDB build. A sharing job records that it started
@@ -59,7 +59,7 @@ on:
       lastdb_source_sha:
         description: "Pin a 40-hex LastDB commit (must include #1805 UDS). Builds binaries from that SHA. Mutually exclusive with lastdb_release"
         type: string
-        default: "009d853b2e09ef02381a974c739b422ebb8203fb"
+        default: "3b8322a25e816e2cd6078f0189e6987aef3531f9"
       relay_url:
         description: "ExeMem DEV relay origin (https://….execute-api….amazonaws.com), no /relay path and no credentials. Empty uses environments.dev.exemem_api from the LastDB source under test"
         type: string
@@ -141,9 +141,9 @@ jobs:
           set -euo pipefail
           release="${LASTDB_RELEASE:-}"
           sha="${LASTDB_SOURCE_SHA:-}"
-          # #1816 squash on main (drain outbox batches; includes #1815…#1812).
+          # #1817 head (reload outbox on replay; includes #1816…#1812).
           # Used when neither a release nor an explicit SHA is set.
-          default_sha="009d853b2e09ef02381a974c739b422ebb8203fb"
+          default_sha="3b8322a25e816e2cd6078f0189e6987aef3531f9"
           if [ -n "$release" ] && [ -n "$sha" ]; then
             echo "lastdb_release and lastdb_source_sha are mutually exclusive" >&2
             exit 2

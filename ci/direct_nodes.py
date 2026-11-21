@@ -50,54 +50,6 @@ def node_entry(node, database):
     return "%s %s %s" % (files_text(node, database), ops_text(node), sync_text(node, database))
 
 
-def grant_state(publisher, reader, database):
-    """Local authored grants + outbox + cloud last_error beside a relay 403."""
-    return "grant-state pub=%s rdr=%s disk=%s authored=%s" % (
-        clip_public(sync_text(publisher, database), 200),
-        clip_public(sync_text(reader, database), 200),
-        files_text(publisher, database),
-        authored_grants(publisher, database),
-    )
-
-
-def authored_grants(node, database):
-    """Publisher-authored birth/grant rows on disk (kind/seq/grantee/role)."""
-    if not isinstance(database, str) or not DATABASE_ID.fullmatch(database):
-        return "authored=-"
-    path = Path(node.home) / "log-sync" / database / "authored.json"
-    raw = read_limited(path, 512 * 1024)
-    if raw is None:
-        return "authored=-"
-    try:
-        entries = decode_json(raw)
-    except OperationError:
-        return "authored=bad"
-    if not isinstance(entries, list):
-        return "authored=bad"
-    parts = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        kind = entry.get("kind")
-        if kind not in ("birth", "grant"):
-            continue
-        seq = entry.get("writer_seq")
-        if kind == "birth":
-            parts.append("birth@%s" % (seq if type(seq) is int else "?"))
-            continue
-        grantee = entry.get("grantee")
-        role = entry.get("role")
-        parts.append("grant@%s:%s:%s" % (
-            seq if type(seq) is int else "?",
-            grantee if isinstance(grantee, str) else "?",
-            role if isinstance(role, str) else "?",
-        ))
-    if not parts:
-        return "authored=0"
-    extra = "" if len(parts) <= 12 else "+%s" % (len(parts) - 12)
-    return "authored=%s:%s%s" % (len(parts), ",".join(parts[:12]), extra)
-
-
 def live(node):
     process = getattr(node, "process", None)
     return process is not None and process.poll() is None
@@ -301,6 +253,7 @@ def failure_evidence(roster, database):
     if cloud:
         parts.append(cloud)
     try:
+        from grant_probe import grant_state
         by_name = {name: node for name, node in roster}
         if "publisher" in by_name and "Ana" in by_name:
             parts.append(grant_state(by_name["publisher"], by_name["Ana"], database))

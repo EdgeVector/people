@@ -52,7 +52,8 @@ def wait_for_album(node, database, index):
         except Exception as error:
             sample["show"] = "%s:%s" % (type(error).__name__, error)
         try:
-            from direct_nodes import authored_grants, files_text, sync_text
+            from direct_nodes import files_text, sync_text
+            from grant_probe import authored_grants
             sample["cloud"] = sync_text(node, database)
             sample["disk"] = "%s %s" % (files_text(node, database), authored_grants(node, database))
         except Exception as error:

@@ -59,7 +59,16 @@ def sync_text(node, database):
     cloud = cloud_sync(owner_status(node))
     if cloud is None:
         return "sync=unread"
-    err = clip_public(cloud.get("last_error"), 120) if isinstance(cloud.get("last_error"), str) else "-"
+    raw_err = cloud.get("last_error")
+    # Grant 403 bodies are printed in full on a separate grant-403 line;
+    # do not clip them into the compact sync= err= field (120 chars hid
+    # caller / has_publisher / subjects).
+    if isinstance(raw_err, str) and '"field":"grant"' in raw_err:
+        err = "grant-403"
+    elif isinstance(raw_err, str):
+        err = clip_public(raw_err, 120)
+    else:
+        err = "-"
     text = "sync=%s/%s/%s err=%s n=%s" % (
         bit(cloud.get("connected")), bit(cloud.get("captures_accepted")),
         bit(cloud.get("payment_hold")), err, count_of(cloud.get("databases")))
@@ -253,10 +262,13 @@ def failure_evidence(roster, database):
     if cloud:
         parts.append(cloud)
     try:
-        from grant_probe import grant_state
+        from grant_probe import grant_403_roster, grant_state
         by_name = {name: node for name, node in roster}
         if "publisher" in by_name and "Ana" in by_name:
             parts.append(grant_state(by_name["publisher"], by_name["Ana"], database))
+        grant_lines = grant_403_roster(roster)
+        if grant_lines:
+            parts.append(grant_lines)
     except Exception:
         parts.append("grant-state=failed")
     return "\n".join(parts)[:48000]

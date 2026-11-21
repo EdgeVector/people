@@ -50,15 +50,6 @@ def node_entry(node, database):
     return "%s %s %s" % (files_text(node, database), ops_text(node), sync_text(node, database))
 
 
-def grant_state(publisher, reader, database):
-    """Local outbox + cloud last_error beside a relay 403 field=grant."""
-    return "grant-state pub=%s rdr=%s disk=%s" % (
-        clip_public(sync_text(publisher, database), 160),
-        clip_public(sync_text(reader, database), 160),
-        files_text(publisher, database),
-    )
-
-
 def live(node):
     process = getattr(node, "process", None)
     return process is not None and process.poll() is None
@@ -262,6 +253,7 @@ def failure_evidence(roster, database):
     if cloud:
         parts.append(cloud)
     try:
+        from grant_probe import grant_state
         by_name = {name: node for name, node in roster}
         if "publisher" in by_name and "Ana" in by_name:
             parts.append(grant_state(by_name["publisher"], by_name["Ana"], database))

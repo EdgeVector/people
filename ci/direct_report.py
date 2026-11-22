@@ -7,7 +7,7 @@ section, and failure() then keeps 65536 characters. The compact node line
 is unchanged. direct-logs is still attached when an earlier read fails.
 The publish section is built in direct_publish.py.
 
-A node entry is files=cursor/prefix/error from log-sync/<database id>/,
+A node entry is files=birth/uploaded/error from log-sync/<database id>/,
 then ops (a call containing x/databases or /v1/write, or a refused sync,
 backup, mutation, or share call), then sync=connected/captures_accepted/
 payment_hold, err (the cloud sync last_error), and n (how many databases
@@ -150,7 +150,7 @@ def attach(error, roster, database, evidence=False):
 
 
 def _grant_probe_lines(roster, database):
-    from grant_probe import grant_403_roster, grant_state
+    from grant_probe import chain_roster, grant_403_roster, grant_state
     by_name = {name: node for name, node in roster}
     parts = []
     if "publisher" in by_name and "Ana" in by_name:
@@ -158,6 +158,8 @@ def _grant_probe_lines(roster, database):
     grant_lines = grant_403_roster(roster)
     if grant_lines:
         parts.append(grant_lines)
+    # Last, so a clipped failure tail keeps the entries each node holds.
+    parts.append(chain_roster(roster, database))
     return "\n".join(parts)
 
 

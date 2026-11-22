@@ -154,27 +154,16 @@ def files_text(node, database):
         return "files=-"
     root = Path(node.home) / "log-sync" / database
     birth = "birth" if (root / "birth.json").is_file() else "-"
-    return "files=%s/%s/%s" % (birth, outbox_text(root / "outbox.json"), error_bits(root))
+    return "files=%s/%s/%s" % (birth, uploaded_text(root / "uploaded.json"), error_bits(root))
 
 
-def outbox_text(path):
-    raw = read_limited(path, 256 * 1024)
+def uploaded_text(path):
+    """uploaded.json holds one number: how many authored entries the relay acknowledged."""
+    raw = read_limited(path, 64)
     if raw is None:
-        return "outbox=-"
-    try:
-        entries = decode_json(raw)
-    except OperationError:
-        return "outbox=bad"
-    if not isinstance(entries, list):
-        return "outbox=bad"
-    if not entries:
-        return "outbox=0"
-    kinds = []
-    for entry in entries[:8]:
-        kind = entry.get("kind") if isinstance(entry, dict) else None
-        kinds.append(kind if isinstance(kind, str) and kind else "?")
-    extra = "" if len(entries) <= 8 else "+%s" % (len(entries) - 8)
-    return "outbox=%s:%s%s" % (len(entries), ",".join(kinds), extra)
+        return "uploaded=-"
+    value = raw.decode("utf-8", "replace").strip()
+    return "uploaded=%s" % (value if value.isdigit() and len(value) <= 9 else "bad")
 
 
 def error_bits(directory):
@@ -262,10 +251,11 @@ def failure_evidence(roster, database):
     if cloud:
         parts.append(cloud)
     try:
-        from grant_probe import grant_403_roster, grant_state
+        from grant_probe import chain_roster, grant_403_roster, grant_state
         by_name = {name: node for name, node in roster}
         if "publisher" in by_name and "Ana" in by_name:
             parts.append(grant_state(by_name["publisher"], by_name["Ana"], database))
+        parts.append(chain_roster(roster, database))
         grant_lines = grant_403_roster(roster)
         if grant_lines:
             parts.append(grant_lines)
@@ -329,10 +319,10 @@ def tail_bytes(path, limit):
 
 def sync_files(node, database):
     if not isinstance(database, str) or not DATABASE_ID.fullmatch(database):
-        return "birth=- outbox=- error=-"
+        return "birth=- uploaded=- error=-"
     root = Path(node.home) / "log-sync" / database
     birth = "birth=yes" if (root / "birth.json").is_file() else "birth=-"
-    parts = [birth, outbox_text(root / "outbox.json")]
+    parts = [birth, uploaded_text(root / "uploaded.json")]
     parts.extend(error_files(root))
     return " ".join(parts)
 

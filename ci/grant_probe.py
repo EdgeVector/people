@@ -17,26 +17,26 @@ from support import OperationError, decode_json, redact_secrets
 def grant_state(publisher, reader, database):
     """Local authored grants + outbox beside a relay 403; full grant JSON below."""
     parts = [
-        "grant-state pub=%s rdr=%s disk=%s authored=%s orphan=%s" % (
+        "grant-state pub=%s rdr=%s disk=%s authored=%s acknowledged=%s" % (
             clip_public(sync_text(publisher, database), 200),
             clip_public(sync_text(reader, database), 200),
             files_text(publisher, database),
             authored_grants(publisher, database),
-            orphan_authored(publisher, database),
+            acknowledged_authored(publisher, database),
         )
     ]
     upload = upload_error_line(publisher)
     if upload:
         parts.append(upload)
     for label, node in (("publisher", publisher), ("Ana", reader)):
-        line = grant_403_for_node(node)
+        line = grant_403_for_node(node, database)
         if line:
             parts.append("%s %s" % (label, line))
     return "\n".join(parts)
 
 
 def grant_403_roster(roster):
-    """One full grant-403 line per node that has a relay grant denial."""
+    """Per-database grant-403 lines for each node that has a relay grant denial."""
     lines = []
     for name, node in roster:
         line = grant_403_for_node(node)
@@ -45,11 +45,27 @@ def grant_403_roster(roster):
     return "\n".join(lines)
 
 
-def grant_403_for_node(node):
+def grant_403_for_node(node, database=None):
+    """Per-database grant-403 lines from cloud_sync.databases, not node-wide last_error."""
     cloud = cloud_sync(owner_status(node))
     if not isinstance(cloud, dict):
         return None
-    return grant_403_line(cloud.get("last_error"))
+    databases = cloud.get("databases")
+    if not isinstance(databases, dict):
+        return None
+    lines = []
+    for database_id, item in databases.items():
+        if not isinstance(database_id, str) or not isinstance(item, dict):
+            continue
+        if database is not None and database_id != database:
+            continue
+        for side in ("upload", "download"):
+            progress = item.get(side)
+            err = progress.get("last_error") if isinstance(progress, dict) else None
+            line = grant_403_line(err)
+            if line:
+                lines.append("%s %s" % (database_id, line))
+    return "\n".join(lines) if lines else None
 
 
 def grant_403_line(last_error):
@@ -76,8 +92,8 @@ def upload_error_line(node):
     return "upload-error %s" % text if text else None
 
 
-def orphan_authored(node, database):
-    """Birth/grant in authored.json but absent from outbox.json (wiped before upload)."""
+def acknowledged_authored(node, database):
+    """Birth/grant in authored.json but absent from outbox.json (uploaded and acknowledged)."""
     authored = _kind_seqs(node, database, "authored.json")
     if authored is None:
         return "-"

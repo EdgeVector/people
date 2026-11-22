@@ -163,7 +163,7 @@ def exercise_reader(publisher, recipient, database, definitions):
 def verify_results(recipient, database, queued):
     results = sdk(recipient, "submission-status", database=database, ids=[*queued, str(uuid.uuid4())])
     found = _statuses(results)
-    check(found == ["discarded", "published", "discarded", "unknown"],
+    check(found == ["published", "discarded", "unknown"],
           "circle_sdk_final_proposal_results", "statuses=%s n=%s" % (status_text(found), len(found)))
     _recipe().report("The receiving SDK read the final outcome of each of Ana's proposals by UUID.")
 

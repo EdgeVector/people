@@ -12,10 +12,31 @@ import os
 import time
 import uuid
 
+from grant_probe import uploaded_count
 from people_app import SETUP, observe_access, sdk, people
-from people_share import album, wait_for_album, wait_tip_uploaded, write_album
+from people_share import album, wait_for_album, write_album
 from share_node import await_empty_grants, ensure_relay, hex32_id, owner_grant, owner_revoke
 from support import require, retry, run_operation, summary
+
+
+def wait_uploaded_past(node, database, floor, *, seconds=150):
+    """Wait until uploaded.json advances past `floor`.
+
+    After thousands of grants, authored.json exceeds the probe read limit, so
+    comparing authored to uploaded is not usable. The small uploaded.json
+    cursor is enough to know the tip left the node.
+    """
+
+    def load():
+        uploaded = uploaded_count(node, database)
+        uploaded_n = int(uploaded) if isinstance(uploaded, str) and uploaded.isdigit() else None
+        return {"floor": floor, "uploaded": uploaded_n}
+
+    def matches(sample):
+        uploaded = sample.get("uploaded")
+        return isinstance(uploaded, int) and uploaded > floor
+
+    retry("people_tip_uploaded", load, matches, seconds=seconds)
 
 
 SMALL = 10
@@ -100,10 +121,13 @@ def scale(programs, root, publisher, recipient, api_key):
         large_seconds = timed_revoke(publisher, database, generated[1])
         require(large_seconds < max(5.0, small_seconds * 20), "people_scale_revoke_cost")
 
+        before = uploaded_count(publisher, database)
+        floor = int(before) if isinstance(before, str) and before.isdigit() else -1
         write_album(publisher, database, 1)
-        # 3,000 grants leave a long upload queue; green runs needed ~100–147s for
-        # album 1. Wait for the publisher tip first, then give the recipient longer.
-        wait_tip_uploaded(publisher, database, seconds=300)
+        # 3,000 grants leave a long upload queue. Wait for uploaded.json to pass
+        # the pre-album cursor (authored.json is too large for the probe limit),
+        # then give the recipient longer than the old 150s deadline.
+        wait_uploaded_past(publisher, database, floor, seconds=300)
         wait_for_album(recipient, database, 1, seconds=300)
         observe_access(recipient, database, "active")
 

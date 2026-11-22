@@ -121,12 +121,19 @@ def exercise_upgrade(publisher, recipient, database, previous):
     recipe = _recipe()
     new = recipe.declare(publisher, database, recipe.COMMENT, expanded=True)
     check(new != previous, "circle_schema_upgrade_new_definition", saw("definition", changed=new != previous))
-    seeded = recipe.mutation(recipe.COMMENT, new, "upgrade", "Before edit")
+    seeded = recipe.mutation(recipe.COMMENT, new, "upgrade-seed", "Seeded after the upgrade")
     seeded["record"]["caption"] = "Keep the optional field"
     write_owned(publisher, database, seeded)
-    recipe.wait_text("Ana", recipient, database, recipe.COMMENT, "upgrade", "Before edit",
+    recipe.wait_text("Ana", recipient, database, recipe.COMMENT, "upgrade-seed", "Seeded after the upgrade",
                      "circle_upgraded_record_received")
     observe_access(recipient, database, "active", role="submit")
+    # Ana holds submit, so the publisher accepts her change only to a record she
+    # created. She creates the record that she then edits.
+    mine = recipe.mutation(recipe.COMMENT, new, "upgrade", "Before edit")
+    mine["record"]["caption"] = "Keep the optional field"
+    queue_and_restart(publisher, recipient, database, [mine], outcomes=["published"])
+    recipe.wait_text("Ana", recipient, database, recipe.COMMENT, "upgrade", "Before edit",
+                     "circle_upgraded_own_record")
     current = recipe.query(recipient, database, recipe.COMMENT, "upgrade")[0]
     update = recipe.mutation(recipe.COMMENT, new, "upgrade", "After edit")
     update.update(mutation_type="replace", expected={"type": "revision", "revision": current["revision"]},

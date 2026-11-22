@@ -201,8 +201,8 @@ def running(node, *, remove_saved=False):
         node.cleanup_stop()
 
 
-def retry(stage, command, complete):
-    deadline = time.monotonic() + 150
+def retry(stage, command, complete, *, seconds=150):
+    deadline = time.monotonic() + seconds
     last_error = None
     last_value = None
     while time.monotonic() < deadline:

@@ -25,6 +25,12 @@ ALBUM = "dev-albums/Album"
 COMMENT = "dev-comments/Comment"
 STANDARD_COMMENT = "social/Comment"
 COMMENT_GRANT = {"names": [COMMENT, STANDARD_COMMENT]}
+# Per-run name: #1843 syncs the personal DB across the fixed DEV publisher, so a
+# reused "Family" circle keeps prior links/members and breaks declarations.
+CIRCLE_NAME = "Family-%s-%s" % (
+    os.environ.get("GITHUB_RUN_ID", "local"),
+    os.environ.get("GITHUB_RUN_ATTEMPT", "0"),
+)
 REFUSALS = (
     ("select writable schemas", "circle_invalid_schema_selection"),
     ("save verified contacts", "circle_contact_unavailable"),
@@ -224,7 +230,7 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
 def share_with_circle(publisher, recipient, database, second, definitions, reader, sender):
     created = edit_circle(publisher)
     circle = created["circle"]
-    check(revisions(created) == {} and circle["name"] == "Family" and not circle["members"]
+    check(revisions(created) == {} and circle["name"] == CIRCLE_NAME and not circle["members"]
           and not circle["links"], "circle_starts_as_private_membership",
           saw("circle", revisions=len(revisions(created)), name=circle.get("name"),
               members=bool(circle.get("members")), links=bool(circle.get("links"))))
@@ -251,9 +257,9 @@ def share_with_circle(publisher, recipient, database, second, definitions, reade
     observe_access(recipient, second, "active")
     definitions[COMMENT] = exercise_upgrade(publisher, recipient, database, definitions[COMMENT])
     read_links = ("--link", f"{database}=read", "--link", f"{second}={COMMENT}")
-    preview = people(publisher, "circle", "set", "Family", *read_links)
+    preview = people(publisher, "circle", "set", CIRCLE_NAME, *read_links)
     people(publisher, "grant", "revoke", second, reader, "--apply")
-    people(publisher, "circle", "set", "Family", *read_links, "--apply", "--token", preview["token"],
+    people(publisher, "circle", "set", CIRCLE_NAME, *read_links, "--apply", "--token", preview["token"],
            refusal=b"sharing changed since the preview")
     reduced = edit_circle(publisher, *read_links)
     check(all(row.get("status") == "confirmed" for row in reduced["databases"]),
@@ -276,7 +282,7 @@ def report(message):
 
 
 def edit_circle(owner, *arguments):
-    edit = ("circle", "set", "Family", *arguments)
+    edit = ("circle", "set", CIRCLE_NAME, *arguments)
     preview = people(owner, *edit, refusals=REFUSALS)
     errors = sum(1 for row in preview["databases"] if "error" in row)
     check(errors == 0, "circle_reusable_preview", saw("preview", errors=errors))

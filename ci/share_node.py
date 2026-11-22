@@ -15,7 +15,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from node import Connection, OwnedNode
-from people_app import owned_item, record_key, sdk
+from people_app import owned_item, record_key
 from support import CREDENTIALS_FILE, OperationError, decode_json, require, summary, timeout_detail
 
 
@@ -320,10 +320,19 @@ def ensure_relay(node, database):
 
 
 def proposal_statuses(node, database, ids):
-    """The member node's decision state for each id, in order."""
-    rows = sdk(node, "submission-status", database=database, ids=ids)
-    require(isinstance(rows, list) and len(rows) == len(ids), "proposal_status_rows")
-    return [row.get("status") if isinstance(row, dict) else None for row in rows]
+    """The member node's decision state for each id, in order, read on the owner socket.
+
+    The proposal went in on the owner socket, so its status is read there too.
+    This recipe then needs no packed SDK, which the people-direct job does not build.
+    """
+    found = []
+    for mutation_id in ids:
+        status, raw = exchange(node, "POST", f"/api/databases/{database}/submissions/status",
+                               {"mutationId": mutation_id})
+        if status != 200:
+            pinned("proposal_status", status, raw)
+        found.append(decode_json(raw).get("status"))
+    return found
 
 
 def decided(statuses):

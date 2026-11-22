@@ -77,27 +77,6 @@ def wait_for_album(node, database, index, *, seconds=150):
     retry(stage, load, matches, seconds=seconds)
 
 
-def wait_uploaded_past(node, database, floor, *, seconds=150):
-    """Wait until uploaded.json advances past `floor`.
-
-    After thousands of grants, authored.json is larger than the probe read
-    limit, so comparing authored to uploaded is not usable. The small
-    uploaded.json cursor is enough to know the tip left the node.
-    """
-
-    def load():
-        from grant_probe import uploaded_count
-        uploaded = uploaded_count(node, database)
-        uploaded_n = int(uploaded) if isinstance(uploaded, str) and uploaded.isdigit() else None
-        return {"floor": floor, "uploaded": uploaded_n}
-
-    def matches(sample):
-        uploaded = sample.get("uploaded")
-        return isinstance(uploaded, int) and uploaded > floor
-
-    retry("people_tip_uploaded", load, matches, seconds=seconds)
-
-
 def roster(node, database):
     applied = people(node, "db", "show", database)["sharing"]
     require(applied["databaseId"] == database, "people_roster_database")

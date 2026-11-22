@@ -119,7 +119,7 @@ wait = watch
 
 def status_text(found):
     """Known proposal states, joined. A longer list keeps only its length."""
-    known = {"discarded", "published", "unknown", "submitted"}
+    known = {"published", "unknown", "submitted"}
     parts = [item if item in known else "?" for item in found]
     text = ".".join(parts)
     return text if len(text) <= 39 else "n%s" % len(parts)

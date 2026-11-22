@@ -20,7 +20,7 @@ def public_person(person):
 
 
 def can_submit_received(row):
-    """#1805 selfAccess is `{role}` only; submit/write may propose or write."""
+    """#1805 selfAccess is `{role}` only; submit and write members may propose changes."""
     access = row.get("selfAccess") or {}
     return (row.get("sharingMode") == "whole_database"
             and access.get("role") in ("submit", "write"))

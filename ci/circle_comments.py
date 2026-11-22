@@ -89,7 +89,7 @@ def exercise_comment_ownership(publisher, recipient, database, definitions, read
     mine = standard_comment(database, definition, "receiver", "Ana wrote this", "spoofed-author")
     refuse_created_by(publisher, database, definition)
     write_owned(publisher, database, owner_comment)
-    queue_and_restart(publisher, recipient, database, [mine])
+    queue_and_restart(publisher, recipient, database, [mine], outcomes=["published"])
     expected = {"publisher": "Publisher wrote this", "receiver": "Ana wrote this"}
     named = (("publisher", publisher), ("Ana", recipient))
     pages = _comments(named, database, expected, "standard_comments_visible")
@@ -101,7 +101,8 @@ def exercise_comment_ownership(publisher, recipient, database, definitions, read
     edit = replace_comment(mine, moderated["receiver"], "Edited by Ana")
     edit["record"]["author_id"] = "spoofed-editor"
     cross_author = replace_comment(owner_comment, moderated["publisher"], "Forbidden edit")
-    queue_and_restart(publisher, recipient, database, [cross_author, edit])
+    # Ana only created her own comment. The publisher does not accept her edit of the publisher's.
+    queue_and_restart(publisher, recipient, database, [cross_author, edit], outcomes=["not_accepted", "published"])
     expected["receiver"] = "Edited by Ana"
     pages = _comments(named, database, expected, "standard_comment_edit_applied")
     _authors(pages, reader, "spoofed-editor", "standard_edited_author_unchanged", False)
@@ -109,11 +110,11 @@ def exercise_comment_ownership(publisher, recipient, database, definitions, read
     current = next(page for (name, _node), page in zip(named, pages) if name == "Ana")["receiver"]
     delete = {**mine, "mutation_type": "delete", "record": {},
               "expected": {"type": "revision", "revision": current["revision"]}}
-    queue_and_restart(publisher, recipient, database, [delete])
+    queue_and_restart(publisher, recipient, database, [delete], outcomes=["published"])
     expected.pop("receiver")
     wait_pages(named, "standard_own_delete_applied", lambda node: _delete_view(node, database),
                _gone(expected), delete_line)
-    recipe.report("Ana edited and deleted her own comment. The publisher left her edit of the publisher's comment submitted.")
+    recipe.report("Ana edited and deleted her own comment. The publisher did not accept her edit of the publisher's comment.")
 
 
 def exercise_upgrade(publisher, recipient, database, previous):
@@ -132,7 +133,7 @@ def exercise_upgrade(publisher, recipient, database, previous):
                   record={**current["fields"], "text": "After edit"},
                   source_file_name="replacement.txt", metadata={"share_author": "replacement-author"})
     stale = {**update, "record": {**update["record"], "text": "Stale edit"}}
-    queue_and_restart(publisher, recipient, database, [update, stale])
+    queue_and_restart(publisher, recipient, database, [update, stale], outcomes=["published", "not_accepted"])
     for name, node in (("publisher", publisher), ("Ana", recipient)):
         recipe.wait_text(name, node, database, recipe.COMMENT, "upgrade", "After edit",
                          "circle_upgraded_record_edited")
@@ -143,7 +144,7 @@ def exercise_upgrade(publisher, recipient, database, previous):
               "%s %s" % (cell(name, found, "text"), cell("cap", found, "caption")))
         recipe.wait_text(name, node, database, recipe.COMMENT, "allowed", "From Ana",
                          "circle_old_records_preserved")
-    recipe.report("Ana edited the upgraded Comment at the same sharing revision. The added field and the older record remained. The stale edit stayed submitted.")
+    recipe.report("Ana edited the upgraded Comment at the same sharing revision. The added field and the older record remained. The stale edit was not accepted.")
     return new
 
 
@@ -163,8 +164,8 @@ def exercise_reader(publisher, recipient, database, definitions):
 def verify_results(recipient, database, queued):
     results = sdk(recipient, "submission-status", database=database, ids=[*queued, str(uuid.uuid4())])
     found = _statuses(results)
-    # lastdb 1a3b95c2: published / submitted / unknown (Decision 11 — no discarded).
-    check(found == ["published", "submitted", "unknown"],
+    # published (accepted), not_accepted (the publisher said no), unknown (never submitted).
+    check(found == ["published", "not_accepted", "unknown"],
           "circle_sdk_final_proposal_results", "statuses=%s n=%s" % (status_text(found), len(found)))
     _recipe().report("The receiving SDK read the final outcome of each of Ana's proposals by UUID.")
 
@@ -181,8 +182,12 @@ def verify_settled_retry(publisher, recipient, database, update, mutation_id):
     recipe.report("Ana retried a settled mutation with the same UUID and operation. Its published outcome stayed the same.")
 
 
-def queue_and_restart(publisher, recipient, database, updates, *, check_status=False):
-    """Submit while the publisher is down; settle via submission_status after restart."""
+def queue_and_restart(publisher, recipient, database, updates, *, check_status=False, outcomes=None):
+    """Submit while the publisher is down; settle via submission_status after restart.
+
+    The publisher decides every id: published or not_accepted. outcomes, when given,
+    names the final status of each update in order.
+    """
     recipe = _recipe()
     _same_database(recipient, database)
     publisher.stop()
@@ -198,17 +203,17 @@ def queue_and_restart(publisher, recipient, database, updates, *, check_status=F
         publisher.start()
 
     def settled(rows):
-        # Valid proposals become published; invalid/CAS-fail stay submitted
-        # (lastdb 1a3b95c2, Decision 11 — silent rejection, no discarded).
         statuses = _statuses(rows)
-        return (len(statuses) == len(queued)
-                and any(item == "published" for item in statuses)
-                and all(item in ("published", "submitted") for item in statuses))
+        return len(statuses) == len(queued) and all(item in ("published", "not_accepted") for item in statuses)
 
-    wait("circle_publisher_consumed_submissions",
-         lambda: sdk(recipient, "submission-status", database=database, ids=queued),
-         settled,
-         lambda rows, reason: "%s statuses=%s" % (reason, status_text(_statuses(rows))))
+    final = wait("circle_publisher_consumed_submissions",
+                 lambda: sdk(recipient, "submission-status", database=database, ids=queued),
+                 settled,
+                 lambda rows, reason: "%s statuses=%s" % (reason, status_text(_statuses(rows))))
+    found = _statuses(final)
+    if outcomes is not None:
+        check(found == outcomes, "circle_proposal_outcomes",
+              "statuses=%s want=%s" % (status_text(found), status_text(outcomes)))
     return queued
 
 

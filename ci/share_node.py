@@ -1,13 +1,12 @@
 """Owner-socket steps the People command does not provide.
 
 People grants, revokes, and mints consent codes on the signed chain. These
-helpers cover proposal submit and direct writes on the owner socket. They
+helpers cover proposals, their decisions, and the refused /v1/write on the owner socket. They
 never print a key or a credential. ExeMem share_link / share-config paths are
 gone; open hand-off is a People consent code.
 """
 
 import json
-import os
 import re
 import time
 import uuid
@@ -16,7 +15,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from node import Connection, OwnedNode
-from people_app import owned_item, record_key
+from people_app import owned_item, record_key, sdk
 from support import CREDENTIALS_FILE, OperationError, decode_json, require, summary, timeout_detail
 
 
@@ -180,6 +179,12 @@ def proposal(definition, key, text):
             "mutation_type": "create", "expected": {"type": "absent"}, "record": {"text": text}}
 
 
+def replacement(definition, key, text, revision):
+    """A replace proposal that names the record revision the member last read."""
+    return {**proposal(definition, key, text), "mutation_type": "replace",
+            "expected": {"type": "revision", "revision": revision}}
+
+
 def shaped(record):
     row = {"fields": record.get("record") if isinstance(record.get("record"), dict) else {}}
     for name in ("created_by", "updated_by"):
@@ -187,6 +192,9 @@ def shaped(record):
         require(value is None or isinstance(value, str) and value, "record_author")
         if value is not None:
             row[name] = value
+    revision = record.get("revision")
+    if isinstance(revision, str) and revision:
+        row["revision"] = revision
     return row
 
 
@@ -207,6 +215,7 @@ def keyed(node, database, keys):
 
 
 def write_member(node, database, update):
+    """POST /v1/write to a received database. "refused" is the 403 every member gets."""
     status, raw = exchange(node, "POST", "/v1/write", {"mutations": [owned_item(database, update)]})
     if status == 200:
         require(decoded(status, raw, "member_write", ok=False).get("written") == 1, "member_write")
@@ -214,14 +223,6 @@ def write_member(node, database, update):
     if status == 403 and READ_ONLY.encode() in raw:
         return "refused"
     pinned("member_write_rejected", status, raw)
-
-
-def refuse_append(node, database, update, code):
-    """A revoked or non-grantee member's next append must be rejected."""
-    status, raw = exchange(node, "POST", "/v1/write", {"mutations": [owned_item(database, update)]})
-    if status in (401, 403):
-        return
-    pinned(code, status, raw)
 
 
 def submit_proposal(node, database, update):
@@ -280,30 +281,12 @@ def node_key(programs, node, root, label):
 
 
 HEX32 = re.compile(r"[0-9a-f]{64}\Z")
-RELAY_ORIGIN = re.compile(
-    r"https://[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com\Z")
 
 
 def hex32_id(value, code="hex32_id"):
     """Database and stream/device ids are 64 lowercase hex (not UUID)."""
     require(isinstance(value, str) and HEX32.fullmatch(value), code)
     return value
-
-
-def relay_url():
-    """ExeMem DEV relay origin. Paths are /relay/v1/... under this base. No credentials."""
-    url = os.environ.get("RELAY_URL", "").strip().rstrip("/")
-    require(bool(url) and RELAY_ORIGIN.fullmatch(url), "relay_url")
-    return url
-
-
-def store_local_relay(node, url=None):
-    """Write RELAY_URL into log-sync/relay-url. lastdbd also reads LASTDB_RELAY_URL."""
-    url = url or relay_url()
-    path = node.home / "log-sync" / "relay-url"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(url + "\n", encoding="utf-8")
-    return url
 
 
 def read_relays(node, database):
@@ -323,15 +306,39 @@ def bootstrap_relay(node, database):
 
 
 def ensure_relay(node, database):
-    """Point this node at RELAY_URL. #1805 has no UDS to author a relays entry.
+    """Bootstrap the first relay URL from a signed relays entry, if the chain holds one.
 
-    Sync uses LASTDB_RELAY_URL / log-sync/relay-url. When a signed relays entry
-    is already held, also call bootstrap_relay so the local file matches it.
+    The node syncs through LASTDB_RELAY_URL or its saved cloud credentials. #1805
+    has no owner-socket action that authors a relays entry.
     """
-    url = store_local_relay(node)
     listed = read_relays(node, database)
-    if listed["urls"]:
-        boot = bootstrap_relay(node, database)
-        require(boot["url"].rstrip("/") == listed["urls"][0].rstrip("/"), "bootstrap_matches_relays")
-        return boot
-    return {"databaseId": database, "url": url}
+    if not listed["urls"]:
+        return {"databaseId": database}
+    boot = bootstrap_relay(node, database)
+    require(boot["url"].rstrip("/") == listed["urls"][0].rstrip("/"), "bootstrap_matches_relays")
+    return boot
+
+
+def proposal_statuses(node, database, ids):
+    """The member node's decision state for each id, in order."""
+    rows = sdk(node, "submission-status", database=database, ids=ids)
+    require(isinstance(rows, list) and len(rows) == len(ids), "proposal_status_rows")
+    return [row.get("status") if isinstance(row, dict) else None for row in rows]
+
+
+def decided(statuses):
+    return all(item in ("published", "not_accepted") for item in statuses)
+
+
+def await_decisions(node, database, ids, stage):
+    """Wait until the publisher has decided every id. The member sees the decision after it pulls."""
+    return until(stage, lambda: proposal_statuses(node, database, ids), decided)
+
+
+def submit_and_wait(node, database, update, stage):
+    """Propose one change and wait until the publisher accepted it. not_accepted fails."""
+    mutation_id = submit_proposal(node, database, update)
+    found = await_decisions(node, database, [mutation_id], stage)
+    if found != ["published"]:
+        raise OperationError(stage, command_output=("statuses=%s" % " ".join(str(item) for item in found), ""))
+    return mutation_id

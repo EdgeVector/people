@@ -10,7 +10,7 @@ name: DEV sharing
 # lastdb_node/environments.json, and the app SDK's data client.
 #
 # RELAY_URL is the ExeMem DEV HTTP API origin (no path, no credentials).
-# Recipes also export LASTDB_RELAY_URL and write log-sync/relay-url (#1805
+# Recipes also export LASTDB_RELAY_URL, which lastdbd reads (#1805
 # `relays` UDS is read-only; there is no authoring action yet). Empty input
 # defaults to environments.dev.exemem_api from the LastDB source under test
 # (same origin #927 prove-dev-relay uses).

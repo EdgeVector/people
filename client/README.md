@@ -91,7 +91,9 @@ A change to that received database is not a write. `@lastdb/app-sdk`'s
 `submitProposal` posts `POST /v1/x/databases` with `"action": "submit"`.
 The proposal id is `idempotency_key`. The call does not write a record
 locally. Show the change as pending from `getShareSubmissionStatus` until
-the publisher accepts it. `POST /v1/write` to a received database is refused.
+the publisher decides. The state is `submitted`, then `published` (accepted)
+or `not_accepted` (final). `POST /v1/write` to a received database is refused
+for every member, whatever its role.
 
 Use the same id in the `database` field when another app reads this share on
 Ana's device. The owner can manage access in People or revoke a recipient with
@@ -131,8 +133,10 @@ owner review.
 The row `acceptInvitation` returns, and `listDatabases` in the app SDK, expose
 the receiving node's `selfAccess` when available. After LastDB #1805 that object
 is `{ role: "read" | "submit" | "write" }` (no `state` / `stale`). A revoked
-key omits `selfAccess`. Use `role` to guide which write actions the app shows.
-The publisher still checks each proposal.
+key omits `selfAccess`. Use `role` to guide which proposals the app offers.
+Every change from a member is a proposal. A `write` member may propose any
+change. A `submit` member may create records and change its own. The
+publisher decides each proposal and may sign `not_accepted`.
 
 ## Use a named database setup
 

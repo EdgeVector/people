@@ -17,12 +17,12 @@ from support import OperationError, decode_json, redact_secrets
 def grant_state(publisher, reader, database):
     """Local authored grants + outbox beside a relay 403; full grant JSON below."""
     parts = [
-        "grant-state pub=%s rdr=%s disk=%s authored=%s orphan=%s" % (
+        "grant-state pub=%s rdr=%s disk=%s authored=%s acknowledged=%s" % (
             clip_public(sync_text(publisher, database), 200),
             clip_public(sync_text(reader, database), 200),
             files_text(publisher, database),
             authored_grants(publisher, database),
-            orphan_authored(publisher, database),
+            acknowledged_authored(publisher, database),
         )
     ]
     upload = upload_error_line(publisher)
@@ -92,8 +92,8 @@ def upload_error_line(node):
     return "upload-error %s" % text if text else None
 
 
-def orphan_authored(node, database):
-    """Birth/grant in authored.json but absent from outbox.json (wiped before upload)."""
+def acknowledged_authored(node, database):
+    """Birth/grant in authored.json but absent from outbox.json (uploaded and acknowledged)."""
     authored = _kind_seqs(node, database, "authored.json")
     if authored is None:
         return "-"

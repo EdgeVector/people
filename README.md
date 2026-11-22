@@ -322,7 +322,7 @@ A pull request gets syntax, manifest and command-grammar checks
   exclusive with `lastdb_release`); the job builds `lastdb`/`lastdbd` from
   that public SHA (default on dispatch: the #1839 squash on main (members propose, the
   publisher accepts or signs not accepted)
-  `9f642e0f1d72e9bb6079b59722a38ab0b559db5f`). Set `relay_url` to the ExeMem
+  `ea3d7f72b2b5a6d7966552978e7507420b291b9f`). Set `relay_url` to the ExeMem
   DEV HTTP origin (`https://….execute-api….amazonaws.com`, no `/relay` path,
   no credentials). Empty `relay_url` uses `environments.dev.exemem_api` from
   the LastDB source under test.

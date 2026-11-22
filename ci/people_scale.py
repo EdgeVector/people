@@ -13,7 +13,7 @@ import time
 import uuid
 
 from people_app import SETUP, observe_access, sdk, people
-from people_share import album, wait_for_album, write_album
+from people_share import album, wait_for_album, wait_tip_uploaded, write_album
 from share_node import await_empty_grants, ensure_relay, hex32_id, owner_grant, owner_revoke
 from support import require, retry, run_operation, summary
 
@@ -101,7 +101,10 @@ def scale(programs, root, publisher, recipient, api_key):
         require(large_seconds < max(5.0, small_seconds * 20), "people_scale_revoke_cost")
 
         write_album(publisher, database, 1)
-        wait_for_album(recipient, database, 1)
+        # 3,000 grants leave a long upload queue; green runs needed ~100–147s for
+        # album 1. Wait for the publisher tip first, then give the recipient longer.
+        wait_tip_uploaded(publisher, database, seconds=300)
+        wait_for_album(recipient, database, 1, seconds=300)
         observe_access(recipient, database, "active")
 
         people(publisher, "grant", "revoke", database, reader_key, "--apply")

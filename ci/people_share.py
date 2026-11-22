@@ -35,7 +35,7 @@ def album_key(node, database, key):
     return read_records(node, database, SCHEMA, [key])
 
 
-def wait_for_album(node, database, index):
+def wait_for_album(node, database, index, *, seconds=150):
     stage = f"people_album_{index}"
 
     def load():
@@ -74,7 +74,23 @@ def wait_for_album(node, database, index):
                 and isinstance(rows[0].get("fields"), dict)
                 and rows[0]["fields"].get("title") == ALBUMS[index])
 
-    retry(stage, load, matches)
+    retry(stage, load, matches, seconds=seconds)
+
+
+def wait_tip_uploaded(node, database, *, seconds=150):
+    """Wait until every authored log entry has an upload acknowledgement."""
+
+    def load():
+        from grant_probe import authored_count, uploaded_count
+        uploaded = uploaded_count(node, database)
+        uploaded_n = int(uploaded) if isinstance(uploaded, str) and uploaded.isdigit() else None
+        return {"authored": authored_count(node, database), "uploaded": uploaded_n}
+
+    def matches(sample):
+        authored, uploaded = sample.get("authored"), sample.get("uploaded")
+        return isinstance(authored, int) and isinstance(uploaded, int) and authored == uploaded
+
+    retry("people_tip_uploaded", load, matches, seconds=seconds)
 
 
 def roster(node, database):

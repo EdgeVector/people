@@ -107,6 +107,12 @@ def uploaded_count(node, database):
     return text if text.isdigit() and len(text) <= 9 else "bad"
 
 
+def authored_count(node, database):
+    """How many entries this node signed, or None when the log is missing or malformed."""
+    entries = _entries(node, database, "authored.json")
+    return len(entries) if isinstance(entries, list) else None
+
+
 def authored_entries(node, database):
     """Every entry this node signed, as kind@seq with the role, stream or citation that decides it."""
     return "authored=%s" % _listed(_entries(node, database, "authored.json"), False)

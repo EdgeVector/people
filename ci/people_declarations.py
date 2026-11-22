@@ -12,8 +12,12 @@ from support import OperationError, require, summary
 
 
 def configure_bindings(publisher, circle, first, second, scopes):
-    require(sdk(publisher, "circles") == [{"id": circle["id"], "name": circle["name"]}],
-            "app_circle_discovery")
+    # Personal-DB sync can leave circles from earlier DEV runs; only this circle
+    # must be present.
+    found = sdk(publisher, "circles")
+    require(any(row.get("id") == circle["id"] and row.get("name") == circle["name"]
+                for row in found), "app_circle_discovery",
+            detail="circle=%s name=%s found=%s" % (circle["id"], circle["name"], found))
     decline_binding(publisher, circle["id"], first)
     requests = []
     for app, database, grant in (
@@ -35,7 +39,9 @@ def configure_bindings(publisher, circle, first, second, scopes):
         require(status["status"] == "confirmed", "app_request_confirmed_empty_circle")
     require(not people(publisher, "request", "list")["requests"], "app_confirmed_requests_leave_list")
     links = next(row["links"] for row in people(publisher, "circle", "list") if row["id"] == circle["id"])
-    require(links == {first: sorted(scopes), second: []}, "app_declarations_saved")
+    want = {first: sorted(scopes), second: []}
+    require(links == want, "app_declarations_saved",
+            detail="got=%s want=%s" % (json.dumps(links, sort_keys=True), json.dumps(want, sort_keys=True)))
     summary("Two app callers proposed independent bindings through the packaged SDK. The owner approved "
             "both and their confirmed status survived a new People process.")
     return links

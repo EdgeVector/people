@@ -27,7 +27,7 @@ name: DEV sharing
 # one DEV publisher account stays serialized by `dev-sharing-main`.
 #
 # LastDB build under test:
-# - Empty inputs → pin a0a5c493… (lastdb #1839: members propose, the
+# - Empty inputs → pin 9f642e0f… (lastdb #1841 on #1839: members propose, the
 #   publisher accepts or signs not accepted) until a newer nightly.
 # - lastdb_release → that nightly tag.
 # - lastdb_source_sha → build lastdb/lastdbd from that exact public commit
@@ -64,7 +64,7 @@ on:
       lastdb_source_sha:
         description: "Pin a 40-hex LastDB commit (must include #1805 UDS). Builds binaries from that SHA. Mutually exclusive with lastdb_release"
         type: string
-        default: "a0a5c49376d4fe0152bd790bd63dcdfb5c7a863d"
+        default: "9f642e0f1d72e9bb6079b59722a38ab0b559db5f"
       relay_url:
         description: "ExeMem DEV relay origin (https://….execute-api….amazonaws.com), no /relay path and no credentials. Empty uses environments.dev.exemem_api from the LastDB source under test"
         type: string
@@ -152,7 +152,7 @@ jobs:
           sha="${LASTDB_SOURCE_SHA:-}"
           # #1839 squash (members propose, the publisher accepts or signs not
           # accepted). Used when neither a release nor an explicit SHA is set.
-          default_sha="a0a5c49376d4fe0152bd790bd63dcdfb5c7a863d"
+          default_sha="9f642e0f1d72e9bb6079b59722a38ab0b559db5f"
           if [ -n "$release" ] && [ -n "$sha" ]; then
             echo "lastdb_release and lastdb_source_sha are mutually exclusive" >&2
             exit 2

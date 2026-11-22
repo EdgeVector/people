@@ -20,6 +20,12 @@ name: DEV sharing
 # It does not check out another ref: that would run branch code in the
 # privileged main job.
 #
+# EdgeVector/lastdb `ci-required` dispatches this workflow on main (via
+# secrets.GH_PAT) with `lastdb_source_sha` set to the LastDB commit under
+# test. The run-name carries that SHA so the lastdb gate can wait on the
+# exact run. Secrets stay in this repo's `dev-sharing` environment; the
+# one DEV publisher account stays serialized by `dev-sharing-main`.
+#
 # LastDB build under test:
 # - Empty inputs → pin 38c7d705… (lastdb #1823: member writes author their
 #   own stream, revoke-safe publisher pull; includes #1822 and #1821) until a
@@ -71,6 +77,10 @@ on:
         type: choice
         options: [dev, prod]
         default: dev
+
+# Include the LastDB SHA (or nightly tag) so a cross-repo dispatcher can
+# find this run without racing other workflow_dispatch starts.
+run-name: DEV sharing (${{ inputs.lastdb_source_sha || inputs.lastdb_release || github.event_name }})
 
 permissions:
   contents: read

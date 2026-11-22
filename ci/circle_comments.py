@@ -113,7 +113,7 @@ def exercise_comment_ownership(publisher, recipient, database, definitions, read
     expected.pop("receiver")
     wait_pages(named, "standard_own_delete_applied", lambda node: _delete_view(node, database),
                _gone(expected), delete_line)
-    recipe.report("Ana edited and deleted her own comment. The publisher discarded her edit of the publisher's comment.")
+    recipe.report("Ana edited and deleted her own comment. The publisher left her edit of the publisher's comment submitted.")
 
 
 def exercise_upgrade(publisher, recipient, database, previous):
@@ -143,7 +143,7 @@ def exercise_upgrade(publisher, recipient, database, previous):
               "%s %s" % (cell(name, found, "text"), cell("cap", found, "caption")))
         recipe.wait_text(name, node, database, recipe.COMMENT, "allowed", "From Ana",
                          "circle_old_records_preserved")
-    recipe.report("Ana edited the upgraded Comment at the same sharing revision. The added field and the older record remained. The publisher discarded the stale edit.")
+    recipe.report("Ana edited the upgraded Comment at the same sharing revision. The added field and the older record remained. The stale edit stayed submitted.")
     return new
 
 
@@ -156,14 +156,15 @@ def exercise_reader(publisher, recipient, database, definitions):
     recipe.refuse_submission(recipient, database, update)
     for name, node in (("publisher", publisher), ("Ana", recipient)):
         require_absent(name, recipe.query(node, database, recipe.COMMENT, "reader"),
-                       "circle_reader_write_discarded", "text")
+                       "circle_reader_write_absent", "text")
     recipe.report("Ana's read role was refused with 403. Neither node has the reader record.")
 
 
 def verify_results(recipient, database, queued):
     results = sdk(recipient, "submission-status", database=database, ids=[*queued, str(uuid.uuid4())])
     found = _statuses(results)
-    check(found == ["published", "discarded", "unknown"],
+    # lastdb 1a3b95c2: published / submitted / unknown (Decision 11 — no discarded).
+    check(found == ["published", "submitted", "unknown"],
           "circle_sdk_final_proposal_results", "statuses=%s n=%s" % (status_text(found), len(found)))
     _recipe().report("The receiving SDK read the final outcome of each of Ana's proposals by UUID.")
 
@@ -197,8 +198,12 @@ def queue_and_restart(publisher, recipient, database, updates, *, check_status=F
         publisher.start()
 
     def settled(rows):
+        # Valid proposals become published; invalid/CAS-fail stay submitted
+        # (lastdb 1a3b95c2, Decision 11 — silent rejection, no discarded).
         statuses = _statuses(rows)
-        return len(statuses) == len(queued) and all(item in ("published", "discarded") for item in statuses)
+        return (len(statuses) == len(queued)
+                and any(item == "published" for item in statuses)
+                and all(item in ("published", "submitted") for item in statuses))
 
     wait("circle_publisher_consumed_submissions",
          lambda: sdk(recipient, "submission-status", database=database, ids=queued),

@@ -349,9 +349,10 @@ def exercise(publisher, recipient, database, receipt, definitions):
     verify_settled_retry(publisher, recipient, database, updates[0], queued[0])
     for name, node in (("publisher", publisher), ("Ana", recipient)):
         wait_text(name, node, database, COMMENT, "allowed", "From Ana", "circle_authorized_write_applied")
-        wait_text(name, node, database, COMMENT, "seed", f"Initial {COMMENT}", "circle_invalid_create_discarded")
+        wait_text(name, node, database, COMMENT, "seed", f"Initial {COMMENT}", "circle_invalid_create_unchanged")
     message = ("Ana's submit-role proposal for Comment was incorporated. The create that "
-               "targeted the existing seed was discarded. Access came from the chain grant role.")
+               "targeted the existing seed stayed submitted; the seed was unchanged. "
+               "Access came from the chain grant role.")
     print(message, flush=True)
     summary(message)
 

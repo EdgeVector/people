@@ -22,8 +22,8 @@ name: DEV sharing
 #
 # LastDB build under test:
 # - Empty inputs → pin 38c7d705… (lastdb #1823: member writes author their
-#   own stream, revoke-safe publisher pull; includes #1822 write-gate and
-#   publish {pending, lastAttempt}) until a newer nightly.
+#   own stream, revoke-safe publisher pull; includes #1822 and #1821) until a
+#   newer nightly.
 # - lastdb_release → that nightly tag.
 # - lastdb_source_sha → build lastdb/lastdbd from that exact public commit
 #   (default: the #1823 squash).
@@ -142,8 +142,8 @@ jobs:
           release="${LASTDB_RELEASE:-}"
           sha="${LASTDB_SOURCE_SHA:-}"
           # #1823 squash (member writes author their own stream, revoke-safe
-          # publisher pull; includes #1822 write-gate and publish {pending,
-          # lastAttempt}). Used when neither a release nor an explicit SHA is set.
+          # publisher pull; includes #1822 and #1821). Used when neither a
+          # release nor an explicit SHA is set.
           default_sha="38c7d705875908a8acb86cecce67bb5fd93b53dd"
           if [ -n "$release" ] && [ -n "$sha" ]; then
             echo "lastdb_release and lastdb_source_sha are mutually exclusive" >&2

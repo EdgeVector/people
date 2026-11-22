@@ -258,7 +258,7 @@ def read_records(node, database, schema, keys):
     rows = []
     for page in pages:
         records = page.get("records") if isinstance(page, dict) and "error" not in page else None
-        require(isinstance(records, list), "record_read_page")
+        require(isinstance(records, list), "record_read_page", detail=str(page)[:300])
         for record in records:
             fields = record.get("record") if isinstance(record, dict) else None
             revision = record.get("revision") if isinstance(record, dict) else None

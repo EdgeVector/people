@@ -29,14 +29,14 @@ def grant_state(publisher, reader, database):
     if upload:
         parts.append(upload)
     for label, node in (("publisher", publisher), ("Ana", reader)):
-        line = grant_403_for_node(node)
+        line = grant_403_for_node(node, database)
         if line:
             parts.append("%s %s" % (label, line))
     return "\n".join(parts)
 
 
 def grant_403_roster(roster):
-    """One full grant-403 line per node that has a relay grant denial."""
+    """Per-database grant-403 lines for each node that has a relay grant denial."""
     lines = []
     for name, node in roster:
         line = grant_403_for_node(node)
@@ -45,11 +45,27 @@ def grant_403_roster(roster):
     return "\n".join(lines)
 
 
-def grant_403_for_node(node):
+def grant_403_for_node(node, database=None):
+    """Per-database grant-403 lines from cloud_sync.databases, not node-wide last_error."""
     cloud = cloud_sync(owner_status(node))
     if not isinstance(cloud, dict):
         return None
-    return grant_403_line(cloud.get("last_error"))
+    databases = cloud.get("databases")
+    if not isinstance(databases, dict):
+        return None
+    lines = []
+    for database_id, item in databases.items():
+        if not isinstance(database_id, str) or not isinstance(item, dict):
+            continue
+        if database is not None and database_id != database:
+            continue
+        for side in ("upload", "download"):
+            progress = item.get(side)
+            err = progress.get("last_error") if isinstance(progress, dict) else None
+            line = grant_403_line(err)
+            if line:
+                lines.append("%s %s" % (database_id, line))
+    return "\n".join(lines) if lines else None
 
 
 def grant_403_line(last_error):

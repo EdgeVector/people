@@ -57,9 +57,9 @@ def wait_for_album(node, database, index):
             sample["show"] = "%s:%s" % (type(error).__name__, error)
         try:
             from direct_nodes import files_text, sync_text
-            from grant_probe import authored_grants, grant_403_for_node
+            from grant_probe import authored_entries, grant_403_for_node
             sample["cloud"] = sync_text(node, database)
-            sample["disk"] = "%s %s" % (files_text(node, database), authored_grants(node, database))
+            sample["disk"] = "%s %s" % (files_text(node, database), authored_entries(node, database))
             # Last so timeout_detail's tail clip keeps the full grant JSON.
             grant_line = grant_403_for_node(node, database)
             if grant_line:

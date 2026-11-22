@@ -1,5 +1,6 @@
-"""Relay 403 diagnostics: publisher authored rows and full grant JSON."""
+"""Relay 403 diagnostics, and the entries each node holds for a database."""
 
+import re
 from pathlib import Path
 
 from direct_nodes import (
@@ -15,14 +16,12 @@ from support import OperationError, decode_json, redact_secrets
 
 
 def grant_state(publisher, reader, database):
-    """Local authored grants + outbox beside a relay 403; full grant JSON below."""
+    """Sync state and log-sync files beside a relay 403; full grant JSON below."""
     parts = [
-        "grant-state pub=%s rdr=%s disk=%s authored=%s acknowledged=%s" % (
+        "grant-state pub=%s rdr=%s disk=%s" % (
             clip_public(sync_text(publisher, database), 200),
             clip_public(sync_text(reader, database), 200),
             files_text(publisher, database),
-            authored_grants(publisher, database),
-            acknowledged_authored(publisher, database),
         )
     ]
     upload = upload_error_line(publisher)
@@ -92,78 +91,85 @@ def upload_error_line(node):
     return "upload-error %s" % text if text else None
 
 
-def acknowledged_authored(node, database):
-    """Birth/grant in authored.json but absent from outbox.json (uploaded and acknowledged)."""
-    authored = _kind_seqs(node, database, "authored.json")
-    if authored is None:
+def chain_roster(roster, database):
+    """One line per node: the entries it signed, how many the relay took, and the entries it received."""
+    return "\n".join("%s chain %s uploaded=%s %s" % (
+        name, authored_entries(node, database), uploaded_count(node, database),
+        received_entries(node, database)) for name, node in roster)
+
+
+def uploaded_count(node, database):
+    """uploaded.json holds one number: how many authored entries the relay acknowledged."""
+    raw = _read(node, database, "uploaded.json")
+    if raw is None:
         return "-"
-    pending = _kind_seqs(node, database, "outbox.json")
-    if pending is None:
-        pending = set()
-    missing = sorted(authored - pending)
-    if not missing:
+    text = raw.decode("utf-8", "replace").strip()
+    return text if text.isdigit() and len(text) <= 9 else "bad"
+
+
+def authored_entries(node, database):
+    """Every entry this node signed, as kind@seq with the role, stream or citation that decides it."""
+    return "authored=%s" % _listed(_entries(node, database, "authored.json"), False)
+
+
+def received_entries(node, database):
+    """Every entry this node accepted from another stream, with the first 6 hex of its signer."""
+    return "received=%s" % _listed(_entries(node, database, "received.json"), True)
+
+
+def _read(node, database, name):
+    if not isinstance(database, str) or not DATABASE_ID.fullmatch(database):
+        return None
+    return read_limited(Path(node.home) / "log-sync" / database / name, 512 * 1024)
+
+
+def _entries(node, database, name):
+    raw = _read(node, database, name)
+    if raw is None:
+        return None
+    try:
+        entries = decode_json(raw)
+    except OperationError:
+        return "bad"
+    return entries if isinstance(entries, list) else "bad"
+
+
+def _listed(entries, signer):
+    if entries is None:
+        return "-"
+    if entries == "bad":
+        return "bad"
+    labels = [_label(entry, signer) for entry in entries if isinstance(entry, dict)]
+    if not labels:
         return "0"
-    return ",".join(missing[:12]) + ("" if len(missing) <= 12 else "+%s" % (len(missing) - 12))
+    # The newest entries decide a stuck proposal, so a long list keeps its tail.
+    shown = labels[-40:]
+    skipped = "" if len(labels) <= 40 else "..."
+    return "%s:%s%s" % (len(labels), skipped, ",".join(shown))
 
 
-def _kind_seqs(node, database, name):
-    if not isinstance(database, str) or not DATABASE_ID.fullmatch(database):
-        return None
-    path = Path(node.home) / "log-sync" / database / name
-    raw = read_limited(path, 512 * 1024)
-    if raw is None:
-        return None if name == "authored.json" else set()
-    try:
-        entries = decode_json(raw)
-    except OperationError:
-        return None
-    if not isinstance(entries, list):
-        return None
-    out = set()
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        kind = entry.get("kind")
-        if kind not in ("birth", "grant"):
-            continue
-        seq = entry.get("writer_seq")
-        out.add("%s@%s" % (kind, seq if type(seq) is int else "?"))
-    return out
+def _hex(value, width):
+    return value[:width] if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) else "?"
 
 
-def authored_grants(node, database):
-    """Publisher-authored birth/grant rows on disk (kind/seq/grantee/role)."""
-    if not isinstance(database, str) or not DATABASE_ID.fullmatch(database):
-        return "authored=-"
-    path = Path(node.home) / "log-sync" / database / "authored.json"
-    raw = read_limited(path, 512 * 1024)
-    if raw is None:
-        return "authored=-"
-    try:
-        entries = decode_json(raw)
-    except OperationError:
-        return "authored=bad"
-    if not isinstance(entries, list):
-        return "authored=bad"
-    parts = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        kind = entry.get("kind")
-        if kind not in ("birth", "grant"):
-            continue
-        seq = entry.get("writer_seq")
-        if kind == "birth":
-            parts.append("birth@%s" % (seq if type(seq) is int else "?"))
-            continue
+def _word(value):
+    return value if isinstance(value, str) and re.fullmatch(r"[a-z_]{1,16}", value) else "?"
+
+
+def _label(entry, signer):
+    kind = _word(entry.get("kind"))
+    seq = entry.get("writer_seq")
+    text = "%s@%s" % (kind, seq if type(seq) is int else "?")
+    if signer:
+        text = "%s:%s" % (_hex(entry.get("node_key"), 6), text)
+    if kind == "grant":
         grantee = entry.get("grantee")
-        role = entry.get("role")
-        parts.append("grant@%s:%s:%s" % (
-            seq if type(seq) is int else "?",
-            grantee if isinstance(grantee, str) else "?",
-            role if isinstance(role, str) else "?",
-        ))
-    if not parts:
-        return "authored=0"
-    extra = "" if len(parts) <= 12 else "+%s" % (len(parts) - 12)
-    return "authored=%s:%s%s" % (len(parts), ",".join(parts[:12]), extra)
+        who = "any" if grantee == "any" else _hex(grantee, 8)
+        return "%s:%s:%s" % (text, who, _word(entry.get("role")))
+    if kind == "data":
+        accepted = "+from" if isinstance(entry.get("incorporated_from"), dict) else ""
+        return "%s:%s%s" % (text, _word(entry.get("stream")), accepted)
+    if kind == "heads":
+        seen = entry.get("seen_heads")
+        return "%s:cites%s" % (text, len(seen) if isinstance(seen, list) else "?")
+    return text

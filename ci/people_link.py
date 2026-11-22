@@ -41,12 +41,13 @@ def wait_notes(node, database, pairs, stage):
 def prove_reader(reader, database, definition):
     wait_notes(reader, database, (("before", BEFORE), ("after", AFTER)), "link_reader_records")
     report("Reader accepted grant#any via a People consent code and replayed the signed log from birth.")
+    # A /v1/write to a received database is refused for every member, a reader included.
     require(write_member(reader, database, note("Reader write", "reader-write")) == "refused", "link_reader_write")
     require(keyed(reader, database, ["reader-write"])[0] is None, "link_reader_write_kept")
     refuse_proposal(reader, database, proposal(definition, "reader-proposal", "Reader proposal"),
                     "link_reader_proposal")
     require(keyed(reader, database, ["reader-proposal"])[0] is None, "link_reader_proposal_kept")
-    report("The reader was refused on append and proposal paths.")
+    report("The reader was refused on /v1/write and on the submissions route.")
 
 
 def operation(programs, root, publisher, recipient, api_key):

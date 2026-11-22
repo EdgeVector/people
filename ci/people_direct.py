@@ -1,21 +1,23 @@
-"""Prove direct member writes against the DEV cloud.
+"""Prove that members only propose changes to a shared database, against the DEV cloud.
 
-People saves the contacts, grants Submit or read, mints consent codes, and
-accepts them by hand-off. The node takes member writes and submits proposals.
-People has no command for those socket steps.
+People saves the contacts, grants write, submit or read, mints consent codes,
+and accepts them by hand-off. Only the publisher's signature puts a record
+into the database. A member proposes a change on the node's submissions route.
+The publisher accepts it (published) or signs not accepted. A /v1/write to a
+received database is refused for every member. People has no command for
+those socket steps.
 """
 
 import os
-import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from direct_publish import begin_ana_publish, note_ana_publish
 from direct_report import access_report, attach, label, row_report, watch, watch_rows
 from people_app import install, people, write_owned
 from share_node import (
-    READ_ONLY, SCHEMA, await_empty_grants, connect, declare, ensure_relay, hex32_id, keyed,
-    local_node, no_cloud_account, node_key, note, owner_grant, proposal, report, submit_proposal,
-    write_member,
+    await_decisions, await_empty_grants, connect, declare, ensure_relay, hex32_id, keyed,
+    local_node, no_cloud_account, node_key, note, owner_grant, proposal, refuse_proposal,
+    replacement, report, submit_and_wait, submit_proposal, write_member,
 )
 from support import OperationError, run_operation, running
 
@@ -115,7 +117,7 @@ def authored(named, database, key, text, author, stage):
     watch_rows(named, database, key, stage, done, observe)
 
 
-def converge(named, database, key, authors):
+def converge(everyone, database, key, authors, winner):
     def done(rows):
         if any(row is None for row in rows):
             return False
@@ -125,76 +127,79 @@ def converge(named, database, key, authors):
                    and row.get("updated_by") == creator for row in rows)
         if not same:
             return False
-        if authors.get(text) != creator:
+        if text != winner or authors.get(text) != creator:
             raise OperationError("direct_author_mismatch")
         return True
 
-    watch_rows(named, database, key, "direct_same_key_converge", done)
-    report("The same key converged. All three nodes hold the first record in the service's order.")
+    watch_rows(everyone, database, key, "direct_same_key_converge", done)
+    report("The same key converged. Every node holds the proposal that the publisher accepted first.")
 
 
-def same_key(named, database, authors):
-    member_a, member_b = named[1][1], named[2][1]
-    last = "unread"
-    for attempt in range(4):
-        key = "race-%s" % attempt
-        updates = ((member_a, note("from-a", key)), (member_b, note("from-b", key)))
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            outcomes = list(pool.map(lambda item: write_member(item[0], database, item[1]), updates))
-        if outcomes != ["committed", "committed"]:
-            fail("direct_same_key_refused", "outcomes=%s" % " ".join(label(item) for item in outcomes),
-                 socket_refusal={"status": 403, "reason": "direct_same_key_refused", "error_head": READ_ONLY})
-        seen = [keyed(node, database, [key])[0] for node in (member_a, member_b)]
-        texts = tuple(row["fields"].get("text") if row else None for row in seen)
-        last = " ".join(label(item) for item in texts)
-        if texts == ("from-a", "from-b"):
-            converge(named, database, key, authors)
-            return
-    fail("direct_same_key_not_concurrent", "last=%s" % last)
+def same_key(everyone, database, definition, authors):
+    updates = ((everyone[1][1], "from-a"), (everyone[2][1], "from-b"))
+    key = "race"
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        ids = list(pool.map(
+            lambda item: submit_proposal(item[0], database, proposal(definition, key, item[1])), updates))
+    found = [await_decisions(node, database, [mutation_id], "direct_same_key_decided")[0]
+             for (node, _text), mutation_id in zip(updates, ids)]
+    if sorted(found) != ["not_accepted", "published"]:
+        fail("direct_same_key_outcomes", "a=%s b=%s" % (label(found[0]), label(found[1])))
+    converge(everyone, database, key, authors, updates[found.index("published")][1])
+    report("The proposal that lost the same-key race ended not_accepted on its own node.")
 
 
-def follow(named, reader, database, author):
-    outcome = write_member(named[1][1], database, note("After the race", "after-race"))
-    if outcome != "committed":
-        fail("direct_follow_write", "outcome=%s" % label(outcome))
-    authored((*named, ("Cam", reader)), database, "after-race", "After the race", author, "direct_follow")
-    report("A later direct write was visible on every member, including the reader.")
+def follow(everyone, database, definition, author):
+    submit_and_wait(everyone[1][1], database, proposal(definition, "after-race", "After the race"),
+                    "direct_follow_decided")
+    authored(everyone, database, "after-race", "After the race", author, "direct_follow")
+    report("A later proposal was accepted and is visible on every member, including the reader.")
 
 
-def refuse_reader(member, database):
-    outcome = write_member(member, database, note("From the reader", "reader-write"))
+def refuse_write(node, name, database, key, stage):
+    """A /v1/write to a received database is a 403 for every member. No record lands locally."""
+    outcome = write_member(node, database, note("Direct write", key))
     if outcome != "refused":
-        fail("direct_reader_write", "outcome=%s" % label(outcome))
-    row = keyed(member, database, ["reader-write"])[0]
+        fail(stage, "outcome=%s" % label(outcome))
+    row = keyed(node, database, [key])[0]
     if row is not None:
-        fail("direct_reader_write_kept", row_report(("Cam",), [row], "differed"))
-    report("C was refused before a local record. The write route returned 403, a received database is read only.")
+        fail("%s_kept" % stage, row_report((name,), [row], "differed"))
 
 
-def close_direct(publisher, named, database, definition, keys):
-    # Lower Org write grants to Share submit via signed grant entries.
-    for person, key in (("Ana", keys["Ana"]), ("Bo", keys["Bo"])):
-        owner_grant(publisher, database, key, "submit")
-        del person
-    member = named[1][1]
-    outcome = write_member(member, database, note("After proposals", "direct-closed"))
-    if outcome == "committed":
-        watch("direct_undone", lambda: keyed(member, database, ["direct-closed"])[0], lambda row: row is None,
-              lambda row, reason: row_report(("Ana",), [row], reason))
-        report("A committed the write locally. After role reduction the refusal removed it.")
-    else:
-        row = keyed(member, database, ["direct-closed"])[0]
-        if row is not None:
-            fail("direct_refused_record_kept", row_report(("Ana",), [row], "differed"))
-        report("A was refused before a local record after the write→submit reduction.")
-    for name, node in named:
+def refuse_reader(member, database, definition):
+    refuse_proposal(member, database, proposal(definition, "reader-write", "From the reader"),
+                    "direct_reader_proposal")
+    refuse_write(member, "Cam", database, "reader-write", "direct_reader_write")
+    report("C was refused on the submissions route (403) and on /v1/write, and holds no local record.")
+
+
+def close_direct(publisher, everyone, database, definition, keys):
+    ana, bo = everyone[1][1], everyone[2][1]
+    for person in ("Ana", "Bo"):
+        owner_grant(publisher, database, keys[person], "submit")
+    wait_role(ana, database, "submit", None, "direct_lowered_a", "Ana")
+    wait_role(bo, database, "submit", None, "direct_lowered_b", "Bo")
+    # Nothing unaccepted was ever written locally, so the reduction has nothing to undo.
+    refuse_write(ana, "Ana", database, "direct-closed", "direct_write_refused_after_lowering")
+    for name, node in everyone:
         row = keyed(node, database, ["direct-closed"])[0]
         if row is not None:
             fail("direct_refused_record_kept", row_report((name,), [row], "differed"))
-    submit_proposal(named[2][1], database, proposal(definition, "proposed", "Through a proposal"))
-    watch_rows(named, database, "proposed", "direct_proposal",
+    mine, theirs = keyed(ana, database, ["direct-1"])[0], keyed(bo, database, ["direct-1"])[0]
+    if not (mine and mine.get("revision") and theirs and theirs.get("revision")):
+        fail("direct_revision_missing", row_report(("Ana", "Bo"), [mine, theirs], "differed"))
+    foreign = submit_proposal(bo, database, replacement(definition, "direct-1", "Edited by Bo", theirs["revision"]))
+    found = await_decisions(bo, database, [foreign], "direct_foreign_edit_decided")
+    if found != ["not_accepted"]:
+        fail("direct_foreign_edit_outcome", "status=%s" % label(found[0]))
+    submit_and_wait(ana, database, replacement(definition, "direct-1", "Edited by Ana", mine["revision"]),
+                    "direct_own_edit_decided")
+    authored(everyone, database, "direct-1", "Edited by Ana", keys["Ana"], "direct_own_edit_visible")
+    submit_and_wait(bo, database, proposal(definition, "proposed", "Through a proposal"), "direct_proposal_decided")
+    watch_rows(everyone, database, "proposed", "direct_proposal",
                lambda rows: all(row and row["fields"].get("text") == "Through a proposal" for row in rows))
-    report("After reducing to submit, B's change was published through a proposal entry.")
+    report("After reducing to submit, A's edit of her own record was published, B's edit of it was not accepted, "
+           "and B's new record was published. A direct write was still refused and left nothing to undo.")
 
 
 def share(programs, root, publisher, member_a, member_b, member_c, database, definition, granted):
@@ -210,22 +215,21 @@ def share(programs, root, publisher, member_a, member_b, member_c, database, def
             ("Bo", member_b, "from-bo", "write"),
             ("Cam", member_c, "from-cam", "read")):
         handoff(publisher, node, database, person, publisher_key, local_name, role, keys[person])
-    named = (("publisher", publisher), ("Ana", member_a), ("Bo", member_b))
+    everyone = (("publisher", publisher), ("Ana", member_a), ("Bo", member_b), ("Cam", member_c))
     for person, node in members:
         watch_rows(((person, node),), database, "seed", "direct_seed",
                    lambda rows: rows[0] and rows[0]["fields"].get("text") == "Seed")
     wait_role(member_a, database, "write", None, "direct_access_a", "Ana")
     wait_role(member_b, database, "write", None, "direct_access_b", "Bo")
     wait_role(member_c, database, "read", None, "direct_access_c", "Cam")
-    outcome = write_member(member_a, database, note("From Ana", "direct-1"))
-    if outcome != "committed":
-        fail("direct_member_write", "outcome=%s" % label(outcome))
-    authored((*named, ("Cam", member_c)), database, "direct-1", "From Ana", keys["Ana"], "direct_member_visible")
-    report("A's direct write is on every node, with A's node key as created_by and updated_by.")
-    same_key(named, database, {"from-a": keys["Ana"], "from-b": keys["Bo"]})
-    follow(named, member_c, database, keys["Ana"])
-    refuse_reader(member_c, database)
-    close_direct(publisher, named, database, definition, keys)
+    refuse_write(member_a, "Ana", database, "direct-refused", "direct_write_refused")
+    submit_and_wait(member_a, database, proposal(definition, "direct-1", "From Ana"), "direct_member_decided")
+    authored(everyone, database, "direct-1", "From Ana", keys["Ana"], "direct_member_visible")
+    report("A's accepted proposal is on every node, with A's node key as created_by and updated_by.")
+    same_key(everyone, database, definition, {"from-a": keys["Ana"], "from-b": keys["Bo"]})
+    follow(everyone, database, definition, keys["Ana"])
+    refuse_reader(member_c, database, definition)
+    close_direct(publisher, everyone, database, definition, keys)
 
 
 def revoke(publisher, database, granted, failed):

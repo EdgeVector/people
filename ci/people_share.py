@@ -9,7 +9,7 @@ import uuid
 from people_app import (SETUP, expect_setup_offline, install, observe_access,
                         open_content_apps, pick, read_album, read_records, report_content_flow, sdk,
                         people, write_owned)
-from share_node import ensure_relay, hex32_id
+from share_node import ensure_relay, hex32_id, refuse_proposal, write_member
 from support import OperationError, require, retry, run_operation, summary
 
 
@@ -29,6 +29,10 @@ def write_album(node, database, index):
         "record": {"title": ALBUMS[index], "description": "Generated DEV record",
                    "cover_photo_id": "none", "created_at": "2026-11-13T00:00:00Z"},
     })
+
+
+def album_key(node, database, key):
+    return read_records(node, database, SCHEMA, [key])
 
 
 def wait_for_album(node, database, index):
@@ -178,7 +182,7 @@ def transfer(programs, root, publisher, recipient, api_key):
     ensure_relay(publisher, database)
     retry("people_share_cloud_ready", lambda: roster(publisher, database),
           lambda config: config.get("members") == [] and config.get("status") != "unavailable")
-    finish_shared_albums(publisher, database)
+    definitions = finish_shared_albums(publisher, database)
     verify_shared_albums_setup(publisher, name + "-albums")
     contact = root / "reader.contact"
     reader_key = programs.command(recipient.home, [
@@ -193,7 +197,7 @@ def transfer(programs, root, publisher, recipient, api_key):
     person = people(publisher, "person", "add", "Ana", "--node-key", reader_key, "--contact", str(contact))
     require(person == {"name": "Ana", "nodeKey": reader_key}
             and person in people(publisher, "person", "list"), "people_app_saved_contact")
-    share_albums(publisher, recipient, name, database, reader_key, publisher_key)
+    share_albums(publisher, recipient, name, database, reader_key, publisher_key, definitions[SCHEMA])
     check_role_and_overview(programs, root, publisher, database, name, contact, reader_key)
 
 
@@ -204,6 +208,7 @@ def finish_shared_albums(node, database):
             and set(finished["definitions"]) == {
                 "social/Album", "social/AlbumItem", "social/Photo", "social/Comment"},
             "people_share_setup_finished")
+    return finished["definitions"]
 
 
 def verify_shared_albums_setup(node, name):
@@ -247,8 +252,15 @@ def verify_shared_albums_setup(node, name):
     summary(message)
 
 
-def share_albums(publisher, recipient, name, database, reader_key, publisher_key):
-    from share_node import refuse_append, note as share_note
+def revoked_album(definition):
+    return {"type": "mutation", "schema": SCHEMA, "definition_id": definition,
+            "key_value": {"hash": "revoked-proposal", "range": None}, "alternates": {},
+            "mutation_type": "create", "expected": {"type": "absent"},
+            "record": {"title": "Revoked proposal", "description": "Generated DEV record",
+                       "cover_photo_id": "none", "created_at": "2026-11-13T00:00:00Z"}}
+
+
+def share_albums(publisher, recipient, name, database, reader_key, publisher_key, definition):
     try:
         grant_reader(publisher, database, "Ana", reader_key)
         receipt = sdk(publisher, "invite", database=name, recipient={"name": "Ana", "nodeKey": reader_key})
@@ -280,8 +292,13 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
         require(isinstance(revoked_hash, str) and len(revoked_hash) == 64, "people_sdk_revoke")
         expect_roster(publisher, database, {"nodeKey": reader_key, "role": "revoked", "state": "revoked"})
         write_album(publisher, database, 2)
-        refuse_append(recipient, database, share_note("revoked append", "revoked-append"),
-                      "people_revoked_append")
+        # A received database is read only for every member, and a revoked member cannot propose.
+        require(write_member(recipient, database, {
+            "schema": SCHEMA, "key_value": {"hash": "revoked-append"}, "mutation_type": "create",
+            "record": {"title": "Revoked append"}}) == "refused", "people_revoked_append")
+        refuse_proposal(recipient, database, revoked_album(definition), "people_revoked_proposal")
+        require(album_key(recipient, database, "revoked-append") == []
+                and album_key(recipient, database, "revoked-proposal") == [], "people_revoked_kept")
         for _ in range(12):
             require(album(recipient, database, 2) == [], "people_revoked_read_new_album")
             time.sleep(1)
@@ -302,7 +319,7 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
             summary("Final signed revoke acknowledged.")
     message = ("People created a whole-database share and minted a consent code after a signed "
                "reader grant. The recipient accepted the code, replayed the chain, kept the binding "
-               "across restart, read later albums, had the next append rejected after revoke, and "
+               "across restart, read later albums, had a direct write and a proposal refused after revoke, and "
                "caught up after restore.")
     print(message, flush=True)
     summary(message)

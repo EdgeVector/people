@@ -66,7 +66,7 @@ error prints one `people:` line on standard error and exits non-zero.
 | `invite DB --open [--out FILE]` | Mint a Deliver consent code after `grant#any` |
 | `request submit`, `request status ID` | For apps: propose a sharing change, read its outcome |
 | `request list`, `request show ID`, `request approve ID`, `request decline ID` | For the owner: review and decide app proposals |
-| `pick-database --spec NAME --version N --intent read\|write` | List the databases an app can use, or select one |
+| `pick-database --spec NAME --version N --intent read\|write` | List the databases an app can use, or select one. `write` lists the received databases where the member may propose changes |
 | `check` | Report that the People command started |
 
 `PERSON` is a saved contact's name, or a node key. `DB` is a database name or
@@ -157,12 +157,13 @@ replays the signed log. `db show` reports folded chain grants and signed
 heads for comparison.
 
 Compatible schema upgrades keep a grant in place. The publisher still checks
-the specific current definition and the record rules for each write. On a
-whole-database share, a receiver with a `social/Comment` write grant can
-create comments and edit comments they created. The author is `created_by`
+the specific current definition and the record rules for each proposal. On a
+whole-database share, a receiver with a `social/Comment` grant can propose
+comments and edits to comments they created. The publisher signs each accepted
+change, or `not_accepted`. The author is `created_by`
 on the `POST /v1/read` reply: the lowercase hex node key of the writer.
 LastDB sets it when the comment is created and keeps it on a replace.
-`updated_by` is the node key of the writer of this revision. A write that
+`updated_by` is the node key of the writer of this revision. A proposal that
 names `created_by` or `updated_by` is refused. The `author_id` field is not
 the author. It is whatever the writer stored, or empty. A comment with no
 `created_by` stays editable only by the publisher. The publisher can edit or
@@ -228,11 +229,15 @@ outside that trust boundary before treating owner approval as app isolation.
 
 ## How sharing works
 
-An active member with role `submit` can propose a change. The receiver posts
+Only the publisher's signature puts a record into a shared database. A member
+never writes into a database it received. Every member change is a proposal.
+An active member with role `write` or `submit` can propose a change. The receiver posts
 `POST /v1/x/databases` with `"action": "submit"`, the database id, the
 mutation document, and `idempotency_key` (one non-nil lowercase UUID). The
 call answers 202 with `ok`, `status: submitted`, `mutation_id`, and
-`submission_sequence`. It does not write a record on the receiver. An owned
+`submission_sequence`. It does not write a record on the receiver, and the
+local copy stays as it was until the publisher accepts the proposal and the
+receiver pulls it. An owned
 database or an unknown id answers 404. A share that is not a whole database
 answers 403. A member whose role is `read` is refused: HTTP 403, code
 `permission_denied`, message `this member cannot submit this shared mutation`,
@@ -242,9 +247,18 @@ incorporates accepted proposals onto the signed history. Receivers follow
 that log and can read the resulting record after it syncs, with
 `POST /v1/read` and the `database` field. An app that wants to show the
 sender's own change before the publisher accepts it uses
-`"action": "submission_status"` and shows that pending state.
-`POST /v1/write` to a received database is refused unless the member's chain
-role is `write`.
+`"action": "submission_status"` and shows that pending state. The status is
+`submitted` (the publisher has not decided), `published` (accepted),
+`not_accepted` (the publisher said no, and the answer is final) or `unknown`
+(this node never submitted that id). The publisher accepts any create,
+replace or delete from a `write` member. It accepts a create from a `submit`
+member, and a replace or delete only of a record that member created. The
+`expected` check still applies. When two members create the same key, the
+first proposal the publisher processes is `published` and the other is
+`not_accepted`. An accepted change carries the proposing member's key as
+`created_by` and `updated_by`.
+`POST /v1/write` to a received database is refused for every member, whatever
+its role: HTTP 403, `a received database is read only`.
 [How sharing works](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/cloud-api.md)
 
 People turns Share, Deliver and Org into publisher-signed grant and revoke
@@ -260,7 +274,9 @@ publisher-signed grant chain: `read`, `submit`, `write`, or `revoked`. People
 reads that role from the grant (and from `selfAccess` once LastDB folds
 `GrantState`). Deliver uses `grant#any`/`read`. Org uses `write`. Share uses
 `submit` for proposals. A member with role `read` cannot submit. A circle
-link or a preset still chooses `read` or `submit` (or `write` for Org).
+link or a preset still chooses `read` or `submit` (or `write` for Org). A
+`write` member proposes changes to any record. A `submit` member proposes
+changes to its own records. The publisher decides each proposal.
 People invites are hand-off consent codes. LastDB authorizes access from
 signed grant entries on the chain; there is no ExeMem invite or share-config
 path.
@@ -304,9 +320,9 @@ A pull request gets syntax, manifest and command-grammar checks
   newest published nightly, or set it to a tag. Or set `lastdb_source_sha` to
   a 40-hex LastDB commit that includes the People UDS grants (mutually
   exclusive with `lastdb_release`); the job builds `lastdb`/`lastdbd` from
-  that public SHA (default on dispatch: the #1836 squash on main (single-log sync and
-  the v2 sharing rules through schema publication)
-  `69240a1e5557bd19a1dec5036ff54efbf644a688`). Set `relay_url` to the ExeMem
+  that public SHA (default on dispatch: the #1839 squash on main (members propose, the
+  publisher accepts or signs not accepted)
+  `a0a5c49376d4fe0152bd790bd63dcdfb5c7a863d`). Set `relay_url` to the ExeMem
   DEV HTTP origin (`https://….execute-api….amazonaws.com`, no `/relay` path,
   no credentials). Empty `relay_url` uses `environments.dev.exemem_api` from
   the LastDB source under test.
@@ -349,11 +365,11 @@ the app socket, with `people` registered:
 | `people-circles` | Circles grant submit from the chain role, Comment proposals, app sharing requests, grants changed outside People, direct grant, revoke and restore |
 | `people-prepare` | The manifest and schemas produce a valid unsigned registry declaration for this commit on a fresh node |
 | `people-link` | Deliver via `grant#any` plus a People consent-code hand-off; LastDB refuses revoke of `any` |
-| `people-direct` | Org `write` members append directly, converge on one key, a reader is refused, and reducing to `submit` restores proposals |
+| `people-direct` | Org `write` members propose, the publisher accepts them with the member as author, two members that propose the same key end with one `published` and one `not_accepted`, a reader is refused on the submissions route, `/v1/write` to a received database is refused with 403, and after reducing to `submit` a member can still propose and change only its own record |
 
 Where a recipe is the node owner, it keeps the owner socket. That is schema
 placement, roster reads and writes, share settings, a snapshot, an open
-link, a member's proposal, a direct member write, cloud backup, and node
+link, a member's proposal and its decision, the refused direct write, cloud backup, and node
 health. People's own commands do not use those routes.
 
 The recipes are in `ci/`, and the node helpers they use are in `ci/lib/`.

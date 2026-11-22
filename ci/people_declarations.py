@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from people_app import sdk, people
 from share_node import chain_grants, owner_grant, owner_revoke
-from support import require, summary
+from support import OperationError, require, summary
 
 
 def configure_bindings(publisher, circle, first, second, scopes):
@@ -134,18 +134,23 @@ def external_changes(publisher, circle, database, reader):
 
 def person_requests(publisher, database, reader, separate):
     target = {"databaseId": database, "nodeKey": reader}
-    for operation, extra, state in (
-        ("revokePerson", {}, "revoked"),
-        ("restorePerson", {"preset": "viewer"}, "active"),
-        ("setPersonGrant", {"preset": "viewer"}, "active"),
+    # The roster is the signed chain: a revoked person's role is `revoked`.
+    for operation, extra, state, role in (
+        ("revokePerson", {}, "revoked", "revoked"),
+        ("restorePerson", {"preset": "viewer"}, "active", "read"),
+        ("setPersonGrant", {"preset": "viewer"}, "active", "read"),
     ):
         request = propose(publisher, "photo-journal", {**target, "operation": operation, **extra})
         request_id = request["requestId"]
         result = approve(publisher, request_id, preview_request(publisher, request_id))
         rows = roster(publisher, database)["members"]
         grant = next(row for row in rows if row["nodeKey"] == reader)
-        require(result["status"] == "confirmed" and grant["state"] == state and grant["role"] == "read"
-                and any(row["nodeKey"] == separate for row in rows), "app_direct_grant_lifecycle")
+        kept = any(row["nodeKey"] == separate for row in rows)
+        if not (result["status"] == "confirmed" and grant["state"] == state and grant["role"] == role and kept):
+            raise OperationError("app_direct_grant_lifecycle", command_output=(
+                "operation=%s result=%s state=%s role=%s want=%s.%s separate_kept=%s" % (
+                    operation, result.get("status"), grant["state"], grant["role"], state, role,
+                    "1" if kept else "0"), ""))
     summary("The app requested an explicit revoke and restore for one person, and the publisher kept "
             "the other independent grant in place.")
 

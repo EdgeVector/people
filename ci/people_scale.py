@@ -70,10 +70,12 @@ def scale(programs, root, publisher, recipient, api_key):
     people(publisher, "person", "add", "Ana", "--node-key", reader_key, "--contact", str(contact))
     invited = revoked = False
     try:
-        preview = people(publisher, "grant", "set", database, "Ana", "--write", "read")
+        # Address the contact by node key. After personal-DB sync, the fixed DEV
+        # publisher may hold several people named Ana from earlier legs.
+        preview = people(publisher, "grant", "set", database, reader_key, "--write", "read")
         require(preview.get("applied") is False and isinstance(preview.get("token"), str),
                 "people_scale_grant_preview")
-        people(publisher, "grant", "set", database, "Ana", "--write", "read",
+        people(publisher, "grant", "set", database, reader_key, "--write", "read",
                "--apply", "--token", preview["token"])
         receipt = sdk(publisher, "invite", database=name, recipient={"name": "Ana", "nodeKey": reader_key})
         invited = True
@@ -102,7 +104,7 @@ def scale(programs, root, publisher, recipient, api_key):
         wait_for_album(recipient, database, 1)
         observe_access(recipient, database, "active")
 
-        people(publisher, "grant", "revoke", database, "Ana", "--apply")
+        people(publisher, "grant", "revoke", database, reader_key, "--apply")
         revoked = True
         write_album(publisher, database, 2)
         for _ in range(12):
@@ -111,7 +113,7 @@ def scale(programs, root, publisher, recipient, api_key):
         observe_access(recipient, database, "revoked")
     finally:
         if invited and not revoked:
-            people(publisher, "grant", "revoke", database, "Ana", "--apply")
+            people(publisher, "grant", "revoke", database, reader_key, "--apply")
     message = ("People granted one real reader on the signed chain, added 3,000 generated "
                "reader grants, kept O(1)-ish revoke cost, and stopped the real recipient after revoke.")
     print(message, flush=True)

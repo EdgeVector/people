@@ -59,7 +59,9 @@ def grant(publisher, database, person, scope, granted):
 
 def handoff(publisher, member, database, person, publisher_key, local_name, role, node_key):
     from people_chain_views import expect_member, expect_self_role
-    receipt = people(publisher, "invite", database, person)
+    # Invite by node key; display name can match several synced contacts.
+    del person
+    receipt = people(publisher, "invite", database, node_key)
     matched_db = receipt.get("databaseId") == database
     matched_publisher = receipt.get("publisher") == publisher_key
     consent = receipt.get("consent")
@@ -207,9 +209,11 @@ def share(programs, root, publisher, member_a, member_b, member_c, database, def
     for node in (member_a, member_b, member_c):
         no_cloud_account(node)
     publisher_key, keys = enroll(programs, publisher, members, root)
-    grant(publisher, database, "Ana", "write", granted)
-    grant(publisher, database, "Bo", "write", granted)
-    grant(publisher, database, "Cam", "read", granted)
+    # Grant by node key: personal-DB sync can leave several contacts with the
+    # same display name on the fixed DEV publisher account.
+    grant(publisher, database, keys["Ana"], "write", granted)
+    grant(publisher, database, keys["Bo"], "write", granted)
+    grant(publisher, database, keys["Cam"], "read", granted)
     for person, node, local_name, role in (
             ("Ana", member_a, "from-ana", "write"),
             ("Bo", member_b, "from-bo", "write"),

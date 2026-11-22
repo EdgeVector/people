@@ -113,10 +113,13 @@ def expect_roster(node, database, member=None):
 
 
 def grant_reader(publisher, database, person, reader_key):
-    preview = people(publisher, "grant", "set", database, person, "--write", "read")
+    # Grant by node key so a second Ana contact on the synced personal DB cannot
+    # make the display-name lookup ambiguous.
+    del person
+    preview = people(publisher, "grant", "set", database, reader_key, "--write", "read")
     require(preview.get("applied") is False and isinstance(preview.get("token"), str),
             "people_grant_reader_preview")
-    result = people(publisher, "grant", "set", database, person, "--write", "read",
+    result = people(publisher, "grant", "set", database, reader_key, "--write", "read",
                     "--apply", "--token", preview["token"])
     require(result.get("applied") is True, "people_grant_reader")
     expect_roster(publisher, database, {"nodeKey": reader_key, "role": "read", "state": "active"})
@@ -135,7 +138,7 @@ def mint_consent(publisher, database, contact, node_key):
 
 
 def revoke(publisher, database, reader_key):
-    result = people(publisher, "grant", "revoke", database, "Ana", "--apply")
+    result = people(publisher, "grant", "revoke", database, reader_key, "--apply")
     require(result.get("applied") is True and result.get("databaseId") == database
             and result.get("nodeKey") == reader_key and result.get("state") == "revoked"
             and isinstance(result.get("entryHash"), str), "people_revoke_ack")
@@ -144,10 +147,11 @@ def revoke(publisher, database, reader_key):
 
 
 def restore_reader(publisher, database, person, reader_key):
-    preview = people(publisher, "grant", "restore", database, person, "--write", "read")
+    del person
+    preview = people(publisher, "grant", "restore", database, reader_key, "--write", "read")
     require(preview.get("applied") is False and isinstance(preview.get("token"), str),
             "people_restore_reader_preview")
-    result = people(publisher, "grant", "restore", database, person, "--write", "read",
+    result = people(publisher, "grant", "restore", database, reader_key, "--write", "read",
                     "--apply", "--token", preview["token"])
     require(result.get("applied") is True, "people_restore_reader")
     expect_roster(publisher, database, {"nodeKey": reader_key, "role": "read", "state": "active"})
@@ -339,7 +343,7 @@ def check_role_and_overview(programs, root, publisher, other_database, name, con
           lambda config: config.get("members") == [])
     people(publisher, "invite", database, reader_key, refusal=b"grant access with a circle")
     try:
-        people(publisher, "grant", "set", database, "Ana", "--write", "all", "--apply")
+        people(publisher, "grant", "set", database, reader_key, "--write", "all", "--apply")
         contributor = {"nodeKey": reader_key, "role": "submit", "state": "active"}
         expect_roster(publisher, database, contributor)
         people(publisher, "grant", "revoke", database, reader_key, "--apply")

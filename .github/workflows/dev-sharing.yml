@@ -27,12 +27,11 @@ name: DEV sharing
 # one DEV publisher account stays serialized by `dev-sharing-main`.
 #
 # LastDB build under test:
-# - Empty inputs → pin 38c7d705… (lastdb #1823: member writes author their
-#   own stream, revoke-safe publisher pull; includes #1822 and #1821) until a
-#   newer nightly.
+# - Empty inputs → pin 69240a1e… (lastdb #1836: single-log sync and the v2
+#   sharing rules through schema publication) until a newer nightly.
 # - lastdb_release → that nightly tag.
 # - lastdb_source_sha → build lastdb/lastdbd from that exact public commit
-#   (default: the #1823 squash).
+#   (default: the #1836 squash).
 # lastdb_release and lastdb_source_sha are mutually exclusive.
 #
 # new-nightly selects the LastDB build. A sharing job records that it started
@@ -65,7 +64,7 @@ on:
       lastdb_source_sha:
         description: "Pin a 40-hex LastDB commit (must include #1805 UDS). Builds binaries from that SHA. Mutually exclusive with lastdb_release"
         type: string
-        default: "38c7d705875908a8acb86cecce67bb5fd93b53dd"
+        default: "69240a1e5557bd19a1dec5036ff54efbf644a688"
       relay_url:
         description: "ExeMem DEV relay origin (https://….execute-api….amazonaws.com), no /relay path and no credentials. Empty uses environments.dev.exemem_api from the LastDB source under test"
         type: string
@@ -151,10 +150,10 @@ jobs:
           set -euo pipefail
           release="${LASTDB_RELEASE:-}"
           sha="${LASTDB_SOURCE_SHA:-}"
-          # #1823 squash (member writes author their own stream, revoke-safe
-          # publisher pull; includes #1822 and #1821). Used when neither a
-          # release nor an explicit SHA is set.
-          default_sha="38c7d705875908a8acb86cecce67bb5fd93b53dd"
+          # #1836 squash (single-log sync and the v2 sharing rules through
+          # schema publication). Used when neither a release nor an explicit
+          # SHA is set.
+          default_sha="69240a1e5557bd19a1dec5036ff54efbf644a688"
           if [ -n "$release" ] && [ -n "$sha" ]; then
             echo "lastdb_release and lastdb_source_sha are mutually exclusive" >&2
             exit 2

@@ -304,8 +304,9 @@ A pull request gets syntax, manifest and command-grammar checks
   newest published nightly, or set it to a tag. Or set `lastdb_source_sha` to
   a 40-hex LastDB commit that includes the People UDS grants (mutually
   exclusive with `lastdb_release`); the job builds `lastdb`/`lastdbd` from
-  that public SHA (default on dispatch: the #1819 squash on main (skip personal
-  pull_owned; clear last_error on Ok) `20559c69ccef32c4129070a37a97e6ec20fc9cc4`). Set `relay_url` to the ExeMem
+  that public SHA (default on dispatch: the #1823 squash on main (member writes
+  author their own stream, revoke-safe publisher pull; includes #1822 write-gate
+  and publish {pending, lastAttempt}) `38c7d705875908a8acb86cecce67bb5fd93b53dd`). Set `relay_url` to the ExeMem
   DEV HTTP origin (`https://….execute-api….amazonaws.com`, no `/relay` path,
   no credentials). Empty `relay_url` uses `environments.dev.exemem_api` from
   the LastDB source under test.

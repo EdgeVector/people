@@ -62,7 +62,12 @@ class ReusableCircles:
             operations[operation["databaseId"]] = {**operation, "status": "pending"}
         review = args.get("review", {})
         plans = self.prepare(desired, databases, operations, review)
-        fingerprint = sha256(encoded([directory.revisions(), desired, plans, operation]).encode()).hexdigest()
+        # Fingerprint the approved decision only. CircleStore revision numbers are
+        # omitted: personal-DB sync can rematerialize Circles/DatabaseUpdates with
+        # new revisions between preview and apply while leaving this decision
+        # unchanged. desired/plans/operation still refuse a stale preview when the
+        # circles, roster, grant tip, or direct operation for this edit change.
+        fingerprint = sha256(encoded([desired, plans, operation]).encode()).hexdigest()
         if not apply:
             return self.preview(fingerprint, plans)
         if args.get("token") != fingerprint:

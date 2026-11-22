@@ -33,10 +33,6 @@ class Directory:
         operations = {key: json.loads(row["fields"]["operation"]) for key, row in updates.items()}
         self.operations = {key: value for key, value in operations.items() if value is not None}
 
-    def revisions(self):
-        return sorted([kind[0], key, row["revision"]] for kind, rows in self.rows.items()
-                      for key, row in rows.items())
-
 
 class CircleStore:
     def __init__(self, node):

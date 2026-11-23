@@ -201,6 +201,14 @@ class LastDB:
         body.update({key: value for key, value in fields.items() if value is not None})
         return self.call("POST", "/v1/x/databases", body, request_id=request_id, statuses=(200, 202))
 
+    def lease_length(self, database, length_ms):
+        """Set the lease length of an owned database, or clear it with None.
+
+        `databases()` leaves out a None field, and a clear is an explicit null.
+        """
+        return self.call("POST", "/v1/x/databases",
+                         {"action": "lease_length", "database": database, "length_ms": length_ms})
+
     def read(self, reads):
         if not 1 <= len(reads) <= 64:
             raise PeopleError("a read holds 1 to 64 items")

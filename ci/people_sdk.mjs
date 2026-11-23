@@ -64,6 +64,18 @@ try {
       result = await root.listDatabases();
       break;
     }
+    case 'change': {
+      // The app asks for one change and the node answers applied or pending. A member that
+      // may neither write nor propose is refused; any other failure stays a failure.
+      const root = await connect({ appId: 'people-dev-sdk', socketPath: join(dataDir, 'data', 'folddb.sock') });
+      try {
+        result = await root.select(input.database).changeRecord(input.schema, input.op);
+      } catch (error) {
+        if (!error || error.name !== 'PermissionDeniedError') throw error;
+        result = { refused: error.name };
+      }
+      break;
+    }
     case 'submission-status': {
       const root = await connect({ appId: 'people-dev-sdk', socketPath: join(dataDir, 'data', 'folddb.sock') });
       const client = root.select(input.database);

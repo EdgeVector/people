@@ -29,7 +29,8 @@ def new_circle_id(name, taken):
 def parse_scope(text):
     """Read `read`, `write`, `all`, or a comma-separated list of schema names.
 
-    `write` is the Org chain role (direct member appends). `all` and schema
+    `write` is the Org chain role. A database with a writer holds write leases,
+    and its writers change records directly while a lease covers them. `all` and schema
     names map to the Share `submit` role. Circles still choose the app map.
     """
     if text == "read":

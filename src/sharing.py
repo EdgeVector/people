@@ -13,6 +13,7 @@ relay never see an invite; they only see signed grant entries on the chain.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 import http.client
 import json
 import uuid
@@ -25,6 +26,14 @@ TRANSPORT_ERRORS = (OSError, http.client.HTTPException)
 PENDING_SCHEMA = "people/SharingUpdate"
 ROLES = frozenset({"read", "submit", "write", "revoked"})
 UNREAD = object()
+
+# Org: a database with a `write` member holds write leases. People gives the
+# database this lease length when its first writer arrives and the publisher set
+# none. Three days is the low end of the design's "publisher is on most days" row.
+# A lease is renewed at half its length, so the publisher can be away for a day and
+# a half before members fall back to proposals. Removing a writer takes up to one
+# length. The publisher can set another length with `lastdb share lease`.
+ORG_LEASE_MS = 3 * 24 * 60 * 60 * 1000
 
 
 def can_manage_sharing(database):
@@ -48,6 +57,51 @@ def members_from_grants(reply):
     if reply.get("any") == "read":
         members.append(member_row("any", "read"))
     return members
+
+
+def utc(milliseconds):
+    return datetime.fromtimestamp(milliseconds / 1000, timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def duration(milliseconds):
+    for unit, size in (("day", 86_400_000), ("hour", 3_600_000), ("minute", 60_000)):
+        if milliseconds % size == 0:
+            count = milliseconds // size
+            return f"{count} {unit}{'' if count == 1 else 's'}"
+    return f"{milliseconds / 1000:g} seconds"
+
+
+def member_write_access(row):
+    """What a member of a received database can do now, in one plain sentence."""
+    access = row.get("selfAccess") or {}
+    if access.get("role") not in ("write", "submit"):
+        return None
+    lease = access.get("lease") or {}
+    if access.get("role") == "write" and lease.get("directWrites") and lease.get("directWritesUntilMs"):
+        return f"You can write directly until {utc(lease['directWritesUntilMs'])}."
+    return "Your changes are proposals. The publisher decides each one."
+
+
+def publisher_write_access(reply):
+    """The lease length of an owned database and the end of its current lease."""
+    length = reply.get("leaseLengthMs")
+    if length is None:
+        return None
+    text = f"Members with write access change records directly. Each lease lasts {duration(length)}."
+    if isinstance(reply.get("lease"), dict):
+        text += f" The current lease ends {utc(reply['lease']['expiresAtMs'])}."
+    return text
+
+
+def writers_after(members, ops):
+    """Whether any member holds `write` once these grant and revoke operations are applied."""
+    roles = {row["nodeKey"]: row["role"] for row in members if row["state"] == "active" and row["nodeKey"] != "any"}
+    for op in ops:
+        if op["op"] == "grant":
+            roles[op["nodeKey"]] = op["role"]
+        else:
+            roles.pop(op["nodeKey"], None)
+    return "write" in roles.values()
 
 
 class Sharing:
@@ -252,14 +306,33 @@ class Sharing:
             if error.status != 409:
                 raise
 
+    def lease(self, database_id):
+        """Lease length and the newest lease of an owned database."""
+        return self.chain_call(lambda: self.node.databases("lease", database=database_id))
+
+    def sync_lease_length(self, database_id, org):
+        """Org holds leases. A database with writers gets a length if it has none. One without clears it.
+
+        A length the publisher set stays while a writer remains. A cleared length stops new
+        leases. A lease already signed runs to its end.
+        """
+        length = self.lease(database_id).get("leaseLengthMs")
+        if org and length is None:
+            self.chain_call(lambda: self.node.lease_length(database_id, ORG_LEASE_MS))
+        elif not org and length is not None:
+            self.chain_call(lambda: self.node.lease_length(database_id, None))
+
     def apply(self, database_id, update):
         expected = update.get("expectedEntryHash")
-        tip = self.configuration(database_id).get("entryHash")
+        current = self.configuration(database_id)
+        tip = current.get("entryHash")
         if expected != tip:
             raise LastDBError(
                 "POST", "/v1/x/databases", 409,
                 {"error": {"code": "grant_chain_moved",
                            "message": "grant chain moved since this update was planned"}})
+        # Before the grants: a failed grant stays saved and a retry sets the length again.
+        self.sync_lease_length(database_id, writers_after(current["members"], update["ops"]))
         receipt = None
         for op in update["ops"]:
             if op["op"] == "grant":

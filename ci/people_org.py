@@ -27,7 +27,7 @@ from support import OperationError, run_operation, running
 
 # The People constant that Org gives a database. It is read, not copied.
 sys.path.append(str(ROOT / "src"))
-from sharing import ORG_LEASE_MS, utc  # noqa: E402
+from org import ORG_LEASE_MS, utc  # noqa: E402
 
 LEASE_MS = 60_000
 PROPOSALS = "Your changes are proposals. The publisher decides each one."

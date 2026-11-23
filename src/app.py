@@ -9,7 +9,8 @@ from people import People
 from reusable_circles import ReusableCircles
 from sharing_requests import SharingRequests
 from setups import Setups
-from sharing import Sharing, can_manage_sharing, member_write_access, publisher_write_access
+from org import member_write_access, publisher_write_access
+from sharing import Sharing, can_manage_sharing
 
 
 NODE_KEY = re.compile(r"[0-9a-f]{64}\Z")

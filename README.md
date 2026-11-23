@@ -283,7 +283,7 @@ writer as of this entry may write until this time". The publisher's node signs a
 new one at half life, and only for a database that has a lease length. Org is the
 lease length. When a grant, a circle link or a request leaves a database with a
 `write` member and no lease length, People sets
-`ORG_LEASE_MS` in `src/sharing.py`, 3 days. A length the publisher already set,
+`ORG_LEASE_MS` in `src/org.py`, 3 days. A length the publisher already set,
 for example with `lastdb share lease DB --length 24h`, stays. When the last writer
 leaves (reduced to `submit` or `read`, or revoked), People clears the length. A
 lease that is already signed runs to its end, so a person who left Org can write

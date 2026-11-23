@@ -5,9 +5,9 @@ name: DEV sharing
 # `people` command against the ExeMem DEV relay (`/relay/v1`). people-direct
 # starts four nodes. The other modes start a publisher and one recipient.
 # The recipes are in ci/ and their node helpers in ci/lib/. A checkout of
-# EdgeVector/lastdb (nightly source commit, or a pinned SHA that includes
-# People UDS grants) supplies the compiled endpoint profile,
-# lastdb_node/environments.json, and the app SDK's data client.
+# EdgeVector/lastdb, at the commit of the build under test, supplies the
+# compiled endpoint profile, lastdb_node/environments.json, and the app SDK's
+# data client.
 #
 # RELAY_URL is the ExeMem DEV HTTP API origin (no path, no credentials).
 # Recipes also export LASTDB_RELAY_URL, which lastdbd reads (#1805
@@ -30,16 +30,17 @@ name: DEV sharing
 # group and cancels it when another arrives, which failed the LastDB gate of
 # the cancelled run. Every run now waits and runs.
 #
-# LastDB build under test:
-# - Empty inputs → pin ea3d7f72… (lastdb #1842 on #1839: members propose, the
-#   publisher accepts or signs not accepted) until a newer nightly.
+# LastDB build under test (the new-nightly job selects it):
+# - lastdb_source_sha → build lastdb/lastdbd from that exact public commit.
+#   The LastDB gate sets it for each pull request head.
 # - lastdb_release → that nightly tag.
-# - lastdb_source_sha → build lastdb/lastdbd from that exact public commit
-#   (default: the #1839 squash).
+# - Neither input (a push, the schedules, and a dispatch that names no build,
+#   such as the ExeMem deploy gate) → the newest published nightly of
+#   EdgeVector/lastdb. There is no fallback pin: with no nightly the run fails.
 # lastdb_release and lastdb_source_sha are mutually exclusive.
 #
-# new-nightly selects the LastDB build. A sharing job records that it started
-# by saving the Actions cache key nightly-attempted-<tag> (nightly path only).
+# A sharing job records that it started by saving the Actions cache key
+# nightly-attempted-<tag> (nightly path only).
 # That key is immutable, and nothing in this workflow executes the cached
 # file. Only the first attempt of the minute-41 poll skips a tag that already
 # has the key. The 09:23 run, a push, a manual dispatch, and a human re-run
@@ -65,9 +66,8 @@ on:
         description: "LastDB nightly tag, for example nightly-20261116-3484b912b. Empty selects the newest published nightly (unless lastdb_source_sha is set)"
         type: string
       lastdb_source_sha:
-        description: "Pin a 40-hex LastDB commit (must include #1805 UDS). Builds binaries from that SHA. Mutually exclusive with lastdb_release"
+        description: "Build LastDB from this 40-hex commit. Mutually exclusive with lastdb_release. Empty (with no lastdb_release) selects the newest published nightly"
         type: string
-        default: "ea3d7f72b2b5a6d7966552978e7507420b291b9f"
       relay_url:
         description: "ExeMem DEV relay origin (https://….execute-api….amazonaws.com), no /relay path and no credentials. Empty uses environments.dev.exemem_api from the LastDB source under test"
         type: string
@@ -154,15 +154,18 @@ jobs:
           set -euo pipefail
           release="${LASTDB_RELEASE:-}"
           sha="${LASTDB_SOURCE_SHA:-}"
-          # #1839 squash (members propose, the publisher accepts or signs not
-          # accepted). Used when neither a release nor an explicit SHA is set.
-          default_sha="ea3d7f72b2b5a6d7966552978e7507420b291b9f"
           if [ -n "$release" ] && [ -n "$sha" ]; then
             echo "lastdb_release and lastdb_source_sha are mutually exclusive" >&2
             exit 2
           fi
           if [ -z "$release" ] && [ -z "$sha" ]; then
-            sha="$default_sha"
+            # Newest published nightly that carries the Linux build.
+            release="$(gh api 'repos/EdgeVector/lastdb/releases?per_page=30' \
+              --jq '[.[] | select(.draft == false and (.tag_name | startswith("nightly-")) and any(.assets[]; .name == "lastdb-x86_64-unknown-linux-gnu.tar.gz"))] | sort_by(.published_at) | last | .tag_name // empty')"
+            if [ -z "$release" ]; then
+              echo "No published LastDB nightly with a Linux x86_64 build was found in EdgeVector/lastdb" >&2
+              exit 1
+            fi
           fi
           if [ -n "$sha" ]; then
             [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
@@ -221,9 +224,6 @@ jobs:
           if [ "$POLL" = "true" ] && [ "$CACHE_HIT" = "true" ]; then
             printf 'run_sharing=false\n' >> "$GITHUB_OUTPUT"
             printf -- '- Sharing: skipped, `%s` was already attempted\n' "$TAG" >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$EVENT_NAME" = "schedule" ] && [ "$BUILD_MODE" = "source" ]; then
-            printf 'run_sharing=false\n' >> "$GITHUB_OUTPUT"
-            echo "- Sharing: skipped, fixed source pin on schedule" >> "$GITHUB_STEP_SUMMARY"
           else
             printf 'run_sharing=true\n' >> "$GITHUB_OUTPUT"
             echo "- Sharing: run ($BUILD_MODE)" >> "$GITHUB_STEP_SUMMARY"

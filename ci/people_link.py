@@ -50,14 +50,14 @@ def prove_reader(reader, database, definition):
     report("The reader was refused on /v1/write and on the submissions route.")
 
 
-def operation(programs, root, publisher, recipient, api_key):
+def operation(programs, root, publisher, recipient):
     if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
     name = "ci-link-%s-%s" % (os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"])
     database = create(publisher, name)
     definition = declare(publisher, database)
     write_owned(publisher, database, note(BEFORE, "before"))
-    connect(programs, publisher, api_key)
+    connect(programs, publisher)
     await_empty_grants(publisher, database)
     ensure_relay(publisher, database)
     grant_public_read(publisher, database)

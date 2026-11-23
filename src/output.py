@@ -42,6 +42,13 @@ def grant(member):
     return scope(member.get("writeSchemas"))
 
 
+def org_note(before, after):
+    """Leaving Org: a lease that is already signed keeps its writers covered until it ends."""
+    if (before or {}).get("role") == "write" and (after or {}).get("role") != "write":
+        return " (a lease already signed keeps covering this person until it ends)"
+    return ""
+
+
 def cell(key, value):
     if value is None:
         return "-"
@@ -89,7 +96,8 @@ def change(value):
         lines.append(f"{value.get('appId', 'owner')}: {value['change']['operation']} for {value['subjectName']}")
     if "before" in value:
         lines.append(f"{value['name']}: {names.get(value['nodeKey'], value['nodeKey'])}: "
-                     f"{grant(value['before'])} -> {grant(value['after'])}")
+                     f"{grant(value['before'])} -> {grant(value['after'])}"
+                     + org_note(value["before"], value["after"]))
     for row in value.get("databases", []):
         title = row["name"] or row["databaseId"]
         if "status" in row:
@@ -101,7 +109,8 @@ def change(value):
             lines.append(f"{title}: {row['error']}")
         for item in row.get("changes", []):
             lines.append(f"{title}: {names.get(item['nodeKey'], item['nodeKey'])}: "
-                         f"{grant(item['before'])} -> {grant(item['after'])}")
+                         f"{grant(item['before'])} -> {grant(item['after'])}"
+                         + org_note(item["before"], item["after"]))
         for item in row.get("conflicts", []):
             lines.append(f"{title}: {names.get(item['nodeKey'], item['nodeKey'])} was changed outside People "
                          f"to {grant(item['current'])}")

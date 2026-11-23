@@ -9,6 +9,7 @@ from people import People
 from reusable_circles import ReusableCircles
 from sharing_requests import SharingRequests
 from setups import Setups
+from org import member_write_access, publisher_write_access
 from sharing import Sharing, can_manage_sharing
 
 
@@ -20,7 +21,8 @@ def public_person(person):
 
 
 def can_submit_received(row):
-    """#1805 selfAccess is `{role}` only; submit and write members may propose changes."""
+    """A submit or write member may change this database. The node decides whether
+    the change applies at once (a write member under a lease) or goes out as a proposal."""
     access = row.get("selfAccess") or {}
     return (row.get("sharingMode") == "whole_database"
             and access.get("role") in ("submit", "write"))
@@ -121,11 +123,18 @@ class PeopleApp:
     def database(self, selector):
         row = self.selected(selector)
         if not can_manage_sharing(row):
-            return {"database": row}
+            note = member_write_access(row)
+            return {"database": row, **({"writeAccess": note} if note else {})}
         config = self.sharing.configuration_row(row)
         members = config.get("members", [])
         contacts = self.people.by_keys([item["nodeKey"] for item in members])
         result = {"database": row, "sharing": config, "pendingEdit": self.sharing.pending_edit(row["id"])}
+        try:
+            note = publisher_write_access(self.sharing.lease(row["id"]))
+        except PeopleError:
+            note = None  # the configuration above already reports an unavailable database
+        if note:
+            result["writeAccess"] = note
         circles = []
         if row.get("sharingMode") == "whole_database":
             circles = self.circles.describe(row["id"])

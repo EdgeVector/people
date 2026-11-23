@@ -1,11 +1,12 @@
-"""Prove that members only propose changes to a shared database, against the DEV cloud.
+"""Prove that Share members propose changes to a shared database, against the DEV cloud.
 
-People saves the contacts, grants write, submit or read, mints consent codes,
-and accepts them by hand-off. Only the publisher's signature puts a record
-into the database. A member proposes a change on the node's submissions route.
-The publisher accepts it (published) or signs not accepted. A /v1/write to a
-received database is refused for every member. People has no command for
-those socket steps.
+People saves the contacts, grants submit or read, mints consent codes, and accepts
+them by hand-off. A database with no write member holds no lease. Only the
+publisher's signature puts a record into it. A member proposes a change on the
+node's submissions route. The publisher accepts it (published) or signs not
+accepted. A /v1/write to a received database is refused for every member. People
+has no command for those socket steps. Org members change records directly under a
+lease: that is people-org.
 """
 
 import os
@@ -16,7 +17,7 @@ from direct_report import access_report, attach, label, row_report, watch, watch
 from people_app import install, people, write_owned
 from share_node import (
     await_decisions, await_empty_grants, connect, declare, ensure_relay, hex32_id, keyed,
-    local_node, no_cloud_account, node_key, note, owner_grant, proposal, refuse_proposal,
+    local_node, no_cloud_account, node_key, note, proposal, refuse_proposal,
     replacement, report, submit_and_wait, submit_proposal, write_member,
 )
 from support import OperationError, run_operation, running
@@ -44,7 +45,7 @@ def create(publisher, name):
 
 
 def grant(publisher, database, person, scope, granted):
-    # Org members use --write write (chain Role::Write). Share submit uses all.
+    # Share submit uses all. Org (--write write) gives the database a lease, which people-org proves.
     arguments = ("grant", "set", database, person, "--write", scope)
     preview = people(publisher, *arguments)
     token = preview.get("token")
@@ -175,13 +176,9 @@ def refuse_reader(member, database, definition):
     report("C was refused on the submissions route (403) and on /v1/write, and holds no local record.")
 
 
-def close_direct(publisher, everyone, database, definition, keys):
+def close_direct(everyone, database, definition, keys):
     ana, bo = everyone[1][1], everyone[2][1]
-    for person in ("Ana", "Bo"):
-        owner_grant(publisher, database, keys[person], "submit")
-    wait_role(ana, database, "submit", None, "direct_lowered_a", "Ana")
-    wait_role(bo, database, "submit", None, "direct_lowered_b", "Bo")
-    # Nothing unaccepted was ever written locally, so the reduction has nothing to undo.
+    # Nothing unaccepted was ever written locally.
     refuse_write(ana, "Ana", database, "direct-closed", "direct_write_refused_after_lowering")
     for name, node in everyone:
         row = keyed(node, database, ["direct-closed"])[0]
@@ -200,7 +197,7 @@ def close_direct(publisher, everyone, database, definition, keys):
     submit_and_wait(bo, database, proposal(definition, "proposed", "Through a proposal"), "direct_proposal_decided")
     watch_rows(everyone, database, "proposed", "direct_proposal",
                lambda rows: all(row and row["fields"].get("text") == "Through a proposal" for row in rows))
-    report("After reducing to submit, A's edit of her own record was published, B's edit of it was not accepted, "
+    report("A's edit of her own record was published, B's edit of it was not accepted, "
            "and B's new record was published. A direct write was still refused and left nothing to undo.")
 
 
@@ -211,20 +208,20 @@ def share(programs, root, publisher, member_a, member_b, member_c, database, def
     publisher_key, keys = enroll(programs, publisher, members, root)
     # Grant by node key: personal-DB sync can leave several contacts with the
     # same display name on the fixed DEV publisher account.
-    grant(publisher, database, keys["Ana"], "write", granted)
-    grant(publisher, database, keys["Bo"], "write", granted)
+    grant(publisher, database, keys["Ana"], "all", granted)
+    grant(publisher, database, keys["Bo"], "all", granted)
     grant(publisher, database, keys["Cam"], "read", granted)
     for person, node, local_name, role in (
-            ("Ana", member_a, "from-ana", "write"),
-            ("Bo", member_b, "from-bo", "write"),
+            ("Ana", member_a, "from-ana", "submit"),
+            ("Bo", member_b, "from-bo", "submit"),
             ("Cam", member_c, "from-cam", "read")):
         handoff(publisher, node, database, person, publisher_key, local_name, role, keys[person])
     everyone = (("publisher", publisher), ("Ana", member_a), ("Bo", member_b), ("Cam", member_c))
     for person, node in members:
         watch_rows(((person, node),), database, "seed", "direct_seed",
                    lambda rows: rows[0] and rows[0]["fields"].get("text") == "Seed")
-    wait_role(member_a, database, "write", None, "direct_access_a", "Ana")
-    wait_role(member_b, database, "write", None, "direct_access_b", "Bo")
+    wait_role(member_a, database, "submit", None, "direct_access_a", "Ana")
+    wait_role(member_b, database, "submit", None, "direct_access_b", "Bo")
     wait_role(member_c, database, "read", None, "direct_access_c", "Cam")
     refuse_write(member_a, "Ana", database, "direct-refused", "direct_write_refused")
     submit_and_wait(member_a, database, proposal(definition, "direct-1", "From Ana"), "direct_member_decided")
@@ -233,7 +230,7 @@ def share(programs, root, publisher, member_a, member_b, member_c, database, def
     same_key(everyone, database, definition, {"from-a": keys["Ana"], "from-b": keys["Bo"]})
     follow(everyone, database, definition, keys["Ana"])
     refuse_reader(member_c, database, definition)
-    close_direct(publisher, everyone, database, definition, keys)
+    close_direct(everyone, database, definition, keys)
 
 
 def revoke(publisher, database, granted, failed):

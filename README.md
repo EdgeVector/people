@@ -26,6 +26,8 @@ lists the extension `databases`. The JSON body carries `action`:
 | `heads`, `relays`, `bootstrap_relay` | Signed heads for comparison; relay URL bootstrap |
 | `share_link` | Mint local open-link material that People wraps as a consent code (no ExeMem) |
 | `submit`, `submission_status` | A content app submits one proposal and reads its state. People's own commands do not call these |
+| `change` | A content app changes one record. The node applies it (a write member under a lease) or queues it as a proposal. People's own commands do not call it |
+| `lease`, `lease_length` | Read a database's lease length and newest lease. Set or clear the lease length of an owned database (Org) |
 
 `declare_schema` sends `app_id` from the catalog on the app socket and on the
 owner socket. The shared-albums catalog uses `app_id` `social` and the names
@@ -229,9 +231,11 @@ outside that trust boundary before treating owner approval as app isolation.
 
 ## How sharing works
 
-Only the publisher's signature puts a record into a shared database. A member
-never writes into a database it received. Every member change is a proposal.
-An active member with role `write` or `submit` can propose a change. The receiver posts
+Only the publisher's signature puts a record into a shared database, with one
+exception: a member with role `write` whose node holds a covering write lease
+signs its own change at once (see Org and write leases). Every other member
+change is a proposal. An active member with role `write` or `submit` can propose
+a change. The receiver posts
 `POST /v1/x/databases` with `"action": "submit"`, the database id, the
 mutation document, and `idempotency_key` (one non-nil lowercase UUID). The
 call answers 202 with `ok`, `status: submitted`, `mutation_id`, and
@@ -258,7 +262,8 @@ first proposal the publisher processes is `published` and the other is
 `not_accepted`. An accepted change carries the proposing member's key as
 `created_by` and `updated_by`.
 `POST /v1/write` to a received database is refused for every member, whatever
-its role: HTTP 403, `a received database is read only`.
+its role, except a `write` member under a covering lease: HTTP 403, `a received
+database is read only`.
 [How sharing works](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/cloud-api.md)
 
 People turns Share, Deliver and Org into publisher-signed grant and revoke
@@ -267,12 +272,47 @@ only and bootstraps the first relay URL from a publisher-signed `relays`
 entry. A grant that exists only in People is never authoritative.
 [Relay protocol](https://github.com/EdgeVector/lastdb/blob/main/docs/designs/relay-protocol.md)
 
+## Org and write leases
+
+People has three presets of the signed roles. Deliver is `read` for anyone (`grant#any`).
+Share is `submit`: members propose and the publisher decides. Org is `write`:
+members change records directly while a write lease covers them.
+
+A lease is one publisher-signed entry for the whole database: "everyone who is a
+writer as of this entry may write until this time". The publisher's node signs a
+new one at half life, and only for a database that has a lease length. Org is the
+lease length. When a grant, a circle link or a request leaves a database with a
+`write` member and no lease length, People sets
+`ORG_LEASE_MS` in `src/org.py`, 3 days. A length the publisher already set,
+for example with `lastdb share lease DB --length 24h`, stays. When the last writer
+leaves (reduced to `submit` or `read`, or revoked), People clears the length. A
+lease that is already signed runs to its end, so a person who left Org can write
+directly until then. `grant set` and `grant revoke` say so when they preview or
+apply such a change. A signed lease has no early end. A short length bounds how
+long a removed writer keeps writing, and a long one lets the publisher stay away.
+People does not offer another place to change the length.
+
+`people db show DB` prints `writeAccess`. For a member it is "You can write
+directly until <time>." while a lease covers the node, and "Your changes are
+proposals. The publisher decides each one." otherwise. For the publisher it is the
+lease length and when the current lease ends. A database with no lease length has no
+`writeAccess` for the publisher.
+
+People's commands do not change records of a received database. An app that does
+calls the LastDB app SDK's `changeRecord(schema, op)` (LastDB 0.20.0 or later; the
+`change` action of the `databases` extension). The node answers `applied` (the record is
+in the member's database now) or `pending` (a proposal, `submissionSequence` set). The app
+does not decide which. A reader is refused, and a change that carries a file is
+refused. `pick-database --intent write` lists a received database for any
+`submit` or `write` member, because the node decides how each change goes. An app shows an
+`applied` change at once and a `pending` one as a proposal.
+
 ## What members can change
 
 There is no database-wide write map. Access is the per-member role on the
 publisher-signed grant chain: `read`, `submit`, `write`, or `revoked`. People
 reads that role from the grant (and from `selfAccess` once LastDB folds
-`GrantState`). Deliver uses `grant#any`/`read`. Org uses `write`. Share uses
+`GrantState`). Deliver uses `grant#any`/`read`. Org uses `write` and a lease. Share uses
 `submit` for proposals. A member with role `read` cannot submit. A circle
 link or a preset still chooses `read` or `submit` (or `write` for Org). A
 `write` member proposes changes to any record. A `submit` member proposes
@@ -287,8 +327,10 @@ path.
 the databases that match. Add `--database ID` to check one selection. The
 command returns that database's id, name, and spec. The app names that id in
 the `database` field of each `POST /v1/read` and `POST /v1/write` item. A
-write to a received database is refused. A change to a received
-whole-database share is the proposal described in How sharing works. LastDB
+`/v1/write` to a received database is refused, except for a `write` member under a
+lease. An app changes a received whole-database share with `changeRecord`
+(see Org and write leases), which applies it or queues the proposal described in
+How sharing works. LastDB
 limits an app by the schemas it declared, not by database.
 
 JavaScript and TypeScript apps use [`@lastdb/people-client`](client/README.md)
@@ -346,6 +388,8 @@ gh workflow run dev-sharing.yml -R EdgeVector/people --ref main \
   -f mode=all -f lastdb_source_sha=<40-hex> -f relay_url=https://….execute-api….amazonaws.com
 ```
 
+`people-org` needs a LastDB build with write leases and `changeRecord` (the app SDK 0.20.0).
+
 A red run on `main` from a schedule or a push opens or updates one GitHub
 issue in this repository. The issue is labeled `scheduled-failure`, assigned
 to `shiba4life`, and titled `Scheduled failure: DEV sharing`. A later
@@ -353,7 +397,7 @@ schedule or push run whose sharing jobs succeed closes it. An hourly poll
 that skips sharing does not close it. A manual dispatch does not open or
 close it.
 
-`people-direct` starts four fresh LastDB nodes. The
+`people-direct` starts four fresh LastDB nodes and `people-org` three. The
 other modes start two, a publisher and a recipient. The nodes come from the
 newest published LastDB nightly. Every node has a fresh identity made offline, and the
 publisher enrolls its own with the DEV cloud (`lastdb backup connect --dev`). No
@@ -367,7 +411,8 @@ the app socket, with `people` registered:
 | `people-circles` | Circles grant submit from the chain role, Comment proposals, app sharing requests, grants changed outside People, direct grant, revoke and restore |
 | `people-prepare` | The manifest and schemas produce a valid unsigned registry declaration for this commit on a fresh node |
 | `people-link` | Deliver via `grant#any` plus a People consent-code hand-off; LastDB refuses revoke of `any` |
-| `people-direct` | Org `write` members propose, the publisher accepts them with the member as author, two members that propose the same key end with one `published` and one `not_accepted`, a reader is refused on the submissions route, `/v1/write` to a received database is refused with 403, and after reducing to `submit` a member can still propose and change only its own record |
+| `people-direct` | Share `submit` members propose, the publisher accepts them with the member as author, two members that propose the same key end with one `published` and one `not_accepted`, a reader is refused on the submissions route, `/v1/write` to a received database is refused with 403, and a member can change only its own record |
+| `people-org` | Org on a database with no lease length sets the 3 day default and revoking its last writer clears it. With a 60 second lease a write member's `changeRecord` answers `applied`, is on its node at once and reaches the publisher and a reader with no accept step; a reader is refused; People shows the writer its end time and the publisher the length and expiry; after the writer is reduced to `submit` (the publisher leaves Org) the length clears, the next change answers `pending` and is published after the publisher accepts it, and no new lease is signed |
 
 Where a recipe is the node owner, it keeps the owner socket. That is schema
 placement, roster reads and writes, share settings, a snapshot, an open

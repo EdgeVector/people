@@ -19,6 +19,7 @@ import uuid
 
 from consent import OPEN_PREFIX, decode_consent, encode_consent, open_link_identity
 from lastdb import LastDBError, PeopleError, no_cloud_account, raise_chain_refusal
+from org import ORG_LEASE_MS, writers_after
 
 
 TRANSPORT_ERRORS = (OSError, http.client.HTTPException)
@@ -252,14 +253,33 @@ class Sharing:
             if error.status != 409:
                 raise
 
+    def lease(self, database_id):
+        """Lease length and the newest lease of an owned database."""
+        return self.chain_call(lambda: self.node.databases("lease", database=database_id))
+
+    def sync_lease_length(self, database_id, org):
+        """Org holds leases. A database with writers gets a length if it has none. One without clears it.
+
+        A length the publisher set stays while a writer remains. A cleared length stops new
+        leases. A lease already signed runs to its end.
+        """
+        length = self.lease(database_id).get("leaseLengthMs")
+        if org and length is None:
+            self.chain_call(lambda: self.node.lease_length(database_id, ORG_LEASE_MS))
+        elif not org and length is not None:
+            self.chain_call(lambda: self.node.lease_length(database_id, None))
+
     def apply(self, database_id, update):
         expected = update.get("expectedEntryHash")
-        tip = self.configuration(database_id).get("entryHash")
+        current = self.configuration(database_id)
+        tip = current.get("entryHash")
         if expected != tip:
             raise LastDBError(
                 "POST", "/v1/x/databases", 409,
                 {"error": {"code": "grant_chain_moved",
                            "message": "grant chain moved since this update was planned"}})
+        # Before the grants: a failed grant stays saved and a retry sets the length again.
+        self.sync_lease_length(database_id, writers_after(current["members"], update["ops"]))
         receipt = None
         for op in update["ops"]:
             if op["op"] == "grant":

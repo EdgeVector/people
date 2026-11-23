@@ -20,7 +20,7 @@ DEFER = flag("--defer-conflicts", action="store_true",
              help="With --apply, leave a database with an unresolved outside grant pending for `db retry`")
 DATABASE = flag("database", help="Database name or ID")
 WRITE = flag("--write", default="read", metavar="read|write|all|Schema,Schema",
-             help="Chain role scope: read, write (Org), all/schemas (Share submit). Default: read")
+             help="Chain role scope: read, write (Org: members write directly under a lease), all/schemas (Share submit). Default: read")
 SETUP_VERSION = flag("--version", type=int, default=1, help="Setup version")
 
 COMMANDS = {

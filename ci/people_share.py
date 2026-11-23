@@ -9,7 +9,7 @@ import uuid
 from people_app import (SETUP, expect_setup_offline, install, observe_access,
                         open_content_apps, pick, read_album, read_records, report_content_flow, sdk,
                         people, write_owned)
-from share_node import ensure_relay, hex32_id, refuse_proposal, write_member
+from share_node import connect, ensure_relay, hex32_id, refuse_proposal, write_member
 from support import OperationError, require, retry, run_operation, summary
 
 
@@ -157,7 +157,7 @@ def restore_reader(publisher, database, person, reader_key):
     expect_roster(publisher, database, {"nodeKey": reader_key, "role": "read", "state": "active"})
 
 
-def transfer(programs, root, publisher, recipient, api_key):
+def transfer(programs, root, publisher, recipient):
     name = f"ci-people-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
     if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
@@ -172,17 +172,9 @@ def transfer(programs, root, publisher, recipient, api_key):
     schema = json.loads((SETUP / "Album.json").read_text())
     publisher.call(f"/api/databases/{database}/apps/declare-schema", schema)
     write_album(publisher, database, 0)
-    # Enroll the stopped publisher and verify the next boot, as in people_circles.
-    # Live enrollment can re-exec the daemon with the same PID and a new start time.
-    publisher.stop()
-    connected = programs.command(publisher.home, [
-        "backup", "connect", "--existing", "--env", "dev", "--api-key-stdin",
-        "--expected-user-hash", publisher.account, "--json",
-    ], input_bytes=api_key, timeout=20)
-    require(connected["environment"] == "dev" and connected["account_id"] == publisher.account
-            and connected["credentials_saved"] is True, "people_dev_connection")
-    publisher.keep_saved_credentials = True
-    publisher.start()
+    # Enroll the publisher's fresh identity and verify the next boot, as in
+    # people_circles. Live enrollment can re-exec the daemon with a new start time.
+    connect(programs, publisher)
     ensure_relay(publisher, database)
     retry("people_share_cloud_ready", lambda: roster(publisher, database),
           lambda config: config.get("members") == [] and config.get("status") != "unavailable")

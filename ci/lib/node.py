@@ -26,7 +26,7 @@ from harness import (
     stop_process,
     verify_shutdown_receipt,
 )
-from support import ACCOUNT, CHUNK, CREDENTIALS_FILE, OperationError, decode_json, read_json, require, stable
+from support import CHUNK, CREDENTIALS_FILE, OperationError, decode_json, read_json, require, stable
 
 
 def command_words(command):
@@ -168,7 +168,7 @@ def socket_refusal(path, response):
 
 
 class OwnedNode:
-    def __init__(self, home, programs, account=ACCOUNT, *, isolated_copy=False, keep_saved_credentials=False):
+    def __init__(self, home, programs, account, *, isolated_copy=False, keep_saved_credentials=False):
         self.home, self.programs = home, programs
         require(type(keep_saved_credentials) is bool, "keep_saved_credentials_flag")
         self.keep_saved_credentials = keep_saved_credentials

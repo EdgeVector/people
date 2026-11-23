@@ -16,7 +16,7 @@ from circle_report import (
 from direct_nodes import clip_public
 from node import Connection
 from people_app import expect_setup_offline, install, observe_access, read_records, sdk, people, write_owned
-from share_node import ensure_relay, hex32_id
+from share_node import connect, ensure_relay, hex32_id
 from people_declarations import configure_bindings, external_changes, independent_update, revoke_roster
 from support import OperationError, decode_json, run_operation, summary
 
@@ -161,18 +161,18 @@ def _body(raw):
     return clip_public(text, 200)
 
 
-def transfer(programs, root, publisher, recipient, api_key):
+def transfer(programs, root, publisher, recipient):
     name = f"ci-circles-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
     state = {"database": None}
     roster = [("publisher", publisher), ("Ana", recipient)]
     try:
-        _transfer(programs, root, publisher, recipient, api_key, name, state)
+        _transfer(programs, root, publisher, recipient, name, state)
     except OperationError as error:
         attach(error, roster, state["database"])
         raise
 
 
-def _transfer(programs, root, publisher, recipient, api_key, name, state):
+def _transfer(programs, root, publisher, recipient, name, state):
     if revision := os.environ.get("PEOPLE_INSTALL_REVISION"):
         install(publisher, root, revision)
     expect_setup_offline(recipient, f"{name}-offline")
@@ -188,10 +188,7 @@ def _transfer(programs, root, publisher, recipient, api_key, name, state):
         mutation(schema, definitions[schema], "seed", f"Initial {schema}") for schema in (ALBUM, COMMENT)))
     definition = declare(publisher, second, COMMENT)
     write_owned(publisher, second, mutation(COMMENT, definition, "seed", "Second database"))
-    publisher.stop()
-    connect(programs, publisher, api_key)
-    publisher.keep_saved_credentials = True
-    publisher.start()
+    connect(programs, publisher)
     ensure_relay(publisher, database)
     contact = root / "recipient.contact"
     reader = programs.command(recipient.home, ["share", "contact", "--out", str(contact)])["recipient_public_key"]
@@ -314,17 +311,6 @@ def cleanup(publisher, database):
           saw("roster", status=roster.get("status"), members=roster.get("members") is not None))
     revoke_roster(publisher, database)
     report("Signed revokes confirmed the final recipient removals.")
-
-
-def connect(programs, publisher, api_key):
-    receipt = programs.command(publisher.home, [
-        "backup", "connect", "--existing", "--env", "dev", "--api-key-stdin",
-        "--expected-user-hash", publisher.account, "--json",
-    ], input_bytes=api_key, timeout=20)
-    check(receipt["environment"] == "dev" and receipt["account_id"] == publisher.account
-          and receipt["credentials_saved"] is True, "circle_dev_connection",
-          saw("connect", env=receipt.get("environment"), account=receipt.get("account_id") == publisher.account,
-              saved=receipt.get("credentials_saved")))
 
 
 def exercise(publisher, recipient, database, receipt, definitions):

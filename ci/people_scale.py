@@ -15,7 +15,7 @@ import uuid
 from grant_probe import uploaded_count
 from people_app import SETUP, observe_access, sdk, people
 from people_share import album, wait_for_album, write_album
-from share_node import await_empty_grants, ensure_relay, hex32_id, owner_grant, owner_revoke
+from share_node import await_empty_grants, connect, ensure_relay, hex32_id, owner_grant, owner_revoke
 from support import require, retry, run_operation, summary
 
 
@@ -55,7 +55,7 @@ def timed_revoke(node, database, key):
     return time.monotonic() - started
 
 
-def scale(programs, root, publisher, recipient, api_key):
+def scale(programs, root, publisher, recipient):
     name = f"ci-scale-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
     created = sdk(publisher, "create-shared", name=name)
     database = hex32_id(created["id"], "people_scale_database")
@@ -65,15 +65,7 @@ def scale(programs, root, publisher, recipient, api_key):
     schema = json.loads((SETUP / "Album.json").read_text())
     publisher.call(f"/api/databases/{database}/apps/declare-schema", schema)
     write_album(publisher, database, 0)
-    publisher.stop()
-    connected = programs.command(publisher.home, [
-        "backup", "connect", "--existing", "--env", "dev", "--api-key-stdin",
-        "--expected-user-hash", publisher.account, "--json",
-    ], input_bytes=api_key, timeout=20)
-    require(connected["environment"] == "dev" and connected["credentials_saved"] is True,
-            "people_scale_dev_connection")
-    publisher.keep_saved_credentials = True
-    publisher.start()
+    connect(programs, publisher)
     ensure_relay(publisher, database)
     finished = people(publisher, "db", "verify", database, "--setup", "shared-albums", "--finish")
     require(finished["databaseId"] == database and "memberWrites" not in finished

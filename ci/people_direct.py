@@ -252,7 +252,7 @@ def revoke(publisher, database, granted, failed):
         raise error
 
 
-def operation(programs, root, publisher, recipient, api_key):
+def operation(programs, root, publisher, recipient):
     database = None
     roster = [("publisher", publisher), ("Ana", recipient)]
     try:
@@ -262,7 +262,7 @@ def operation(programs, root, publisher, recipient, api_key):
         database = create(publisher, name)
         definition = declare(publisher, database)
         write_owned(publisher, database, note("Seed", "seed"))
-        connect(programs, publisher, api_key)
+        connect(programs, publisher)
         await_empty_grants(publisher, database)
         ensure_relay(publisher, database)
         member_b = local_node(programs, root, "bo")

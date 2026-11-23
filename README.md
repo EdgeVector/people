@@ -355,7 +355,9 @@ close it.
 
 `people-direct` starts four fresh LastDB nodes. The
 other modes start two, a publisher and a recipient. The nodes come from the
-newest published LastDB nightly. The publisher connects to the DEV cloud.
+newest published LastDB nightly. Every node has a fresh identity made offline, and the
+publisher enrolls its own with the DEV cloud (`lastdb backup connect --dev`). No
+secret or shared account is used, so runs and legs overlap.
 The recipe drives this commit's `people` command through the launcher, on
 the app socket, with `people` registered:
 

@@ -246,14 +246,28 @@ def refuse_proposal(node, database, update, code):
     pinned(code, status, raw)
 
 
-def connect(programs, publisher, api_key):
+def connect(programs, publisher):
+    """Enroll the publisher's own fresh identity with the DEV cloud, then restart it.
+
+    `backup connect --dev` is LastDB's self-serve native enrollment: the node key
+    signs a registration at the Exemem DEV API, which returns a per-device key that
+    the home saves. No shared account, API key or phrase is involved. The node
+    refuses share and grant routes (409 no_cloud_account) until the credentials
+    are saved. The relay itself authenticates by node-key signature.
+    """
     publisher.stop()
-    receipt = programs.command(publisher.home, [
-        "backup", "connect", "--existing", "--env", "dev", "--api-key-stdin",
-        "--expected-user-hash", publisher.account, "--json",
-    ], input_bytes=api_key, timeout=20)
+    try:
+        receipt = programs.command(publisher.home, ["backup", "connect", "--dev", "--json"], timeout=60)
+    except OperationError as error:
+        raise OperationError(
+            "dev_native_enrollment_refused",
+            cli_refusal=error.cli_refusal,
+            command_output=("a fresh identity could not enroll with the DEV cloud: "
+                            "POST /api/auth/cli/register must accept a zero-PII signed registration", ""),
+        ) from error
     require(receipt["environment"] == "dev" and receipt["account_id"] == publisher.account
-            and receipt["credentials_saved"] is True, "dev_connection")
+            and receipt["credentials_saved"] is True and receipt["registration_attempted"] is True,
+            "dev_connection")
     publisher.keep_saved_credentials = True
     publisher.start()
 

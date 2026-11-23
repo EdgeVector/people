@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private, bounded I/O, BIP39 seed decoding and the two-node run for the DEV checks.
+"""Private, bounded I/O and the two-node run for the DEV checks.
 
 Carried from LastDB's scripts/cloud_backup/support.py.
 """
@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,49 +16,12 @@ import stat
 import tempfile
 import time
 
-from harness import summary_line, write_private  # noqa: F401
+from harness import summary_line
 
 
-ACCOUNT = "2a81c95623f2445854a794b5b48471d6"
-WORDS_SHA256 = "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda"
 CHUNK = 1024 * 1024
 # The saved cloud credentials of a LastDB home (CLOUD_CREDENTIALS_FILE in lastdb_node).
 CREDENTIALS_FILE = "cloud-credentials.json"
-
-
-class BaselineDataError(Exception):
-    """A fixed failure code. It never carries a secret value."""
-
-
-def _check_baseline(condition, code):
-    if not condition:
-        raise BaselineDataError(code)
-
-
-def words():
-    path = Path(__file__).resolve().with_name("bip39_english.txt")
-    raw = path.read_bytes()
-    _check_baseline(hashlib.sha256(raw).hexdigest() == WORDS_SHA256, "baseline_word_list_digest")
-    values = raw.decode("ascii").split("\n")[:-1]
-    _check_baseline(len(values) == 2048 and len(set(values)) == 2048, "baseline_word_list_shape")
-    return {word: index for index, word in enumerate(values)}
-
-
-def seed(phrase):
-    """Return the 32-byte Ed25519 seed of a 24-word phrase."""
-    _check_baseline(isinstance(phrase, bytes) and 0 < len(phrase) <= 4096, "baseline_phrase_size")
-    try:
-        items = phrase.decode("ascii").split()
-    except UnicodeDecodeError:
-        raise BaselineDataError("baseline_phrase_text") from None
-    index = words()
-    _check_baseline(len(items) == 24 and all(item in index for item in items), "baseline_phrase_words")
-    bits = 0
-    for item in items:
-        bits = (bits << 11) | index[item]
-    entropy = (bits >> 8).to_bytes(32, "big")
-    _check_baseline(bits & 0xFF == hashlib.sha256(entropy).digest()[0], "baseline_phrase_checksum")
-    return entropy
 
 
 # A long base64 or hex token can be a key, a phrase payload, or an invitation.
@@ -269,34 +231,25 @@ def _run_two_node_operation(operation):
         "share_accepted_ci_only",
     )
     dev_endpoint()
-    phrase = os.environ.pop("LASTDB_CLOUD_DEV_RECOVERY_PHRASE").strip().encode()
-    api_key = os.environ.pop("LASTDB_CLOUD_DEV_API_KEY").encode()
-    require(0 < len(api_key) <= 4096, "share_dev_api_key")
     programs = Programs(args.bin_dir.resolve(strict=True), args.version, dict(os.environ))
     with tempfile.TemporaryDirectory(prefix="ldb-share-", dir="/tmp") as temporary:
         root = Path(temporary).resolve()
-        publisher = OwnedNode(root / "publisher", programs)
-        publisher.home.mkdir(mode=0o700)
-        write_private(publisher.home / "identity.key", seed(phrase))
-        del phrase
-        recipient_home = root / "recipient"
-        initialized = programs.command(
-            None,
-            [
-                "admin",
-                "backup",
-                "init",
-                "--into",
-                str(recipient_home),
-                "--recovery-phrase-out",
-                str(recipient_home / "recovery-phrase.txt"),
-                "--json",
-            ],
-            timeout=20,
-        )
-        recipient = OwnedNode(recipient_home, programs, account=initialized["account_id"])
+
+        def fresh(name):
+            # A new identity made offline. Nothing is shared with another run or
+            # another leg: no account, API key or recovery phrase comes from a secret.
+            home = root / name
+            initialized = programs.command(
+                None,
+                ["admin", "backup", "init", "--into", str(home),
+                 "--recovery-phrase-out", str(home / "recovery-phrase.txt"), "--json"],
+                timeout=20,
+            )
+            return OwnedNode(home, programs, account=initialized["account_id"])
+
+        publisher, recipient = fresh("publisher"), fresh("recipient")
         with running(publisher, remove_saved=True), running(recipient):
-            operation(programs, root, publisher, recipient, api_key)
+            operation(programs, root, publisher, recipient)
     message = "Both generated DEV daemons stopped cleanly and their temporary homes were removed."
     print(message, flush=True)
     summary(message)

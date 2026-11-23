@@ -23,8 +23,12 @@ name: DEV sharing
 # EdgeVector/lastdb `ci-required` dispatches this workflow on main (via
 # secrets.GH_PAT) with `lastdb_source_sha` set to the LastDB commit under
 # test. The run-name carries that SHA so the lastdb gate can wait on the
-# exact run. Secrets stay in this repo's `dev-sharing` environment; the
-# one DEV publisher account stays serialized by `dev-sharing-main`.
+# exact run. Secrets stay in this repo's `dev-sharing` environment. The one
+# DEV publisher account is used by one run at a time: the `turn` job
+# (ci/wait_for_turn.py) holds a run until every earlier run has completed.
+# A concurrency group did that before, but GitHub keeps one pending run per
+# group and cancels it when another arrives, which failed the LastDB gate of
+# the cancelled run. Every run now waits and runs.
 #
 # LastDB build under test:
 # - Empty inputs → pin ea3d7f72… (lastdb #1842 on #1839: members propose, the
@@ -39,8 +43,7 @@ name: DEV sharing
 # That key is immutable, and nothing in this workflow executes the cached
 # file. Only the first attempt of the minute-41 poll skips a tag that already
 # has the key. The 09:23 run, a push, a manual dispatch, and a human re-run
-# always start sharing. A poll that is cancelled while pending never starts
-# the sharing job, so it does not save the key.
+# always start sharing.
 on:
   push:
     branches: [main]
@@ -85,8 +88,9 @@ permissions:
   contents: read
 
 concurrency:
-  # Main runs share one DEV publisher account, so they serialize.
-  group: ${{ github.event_name == 'pull_request' && format('dev-sharing-pr-{0}', github.event.pull_request.number) || 'dev-sharing-main' }}
+  # A newer push to a pull request replaces its older run. Main runs are never
+  # cancelled here: the `turn` job puts them in a line.
+  group: ${{ github.event_name == 'pull_request' && format('dev-sharing-pr-{0}', github.event.pull_request.number) || format('dev-sharing-run-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -318,8 +322,10 @@ jobs:
           retention-days: 1
           overwrite: true
 
-  sharing:
-    name: ${{ matrix.mode }} in DEV
+  # The line for the one DEV publisher account. It comes after the build, so
+  # builds of different runs overlap and only the sharing legs wait.
+  turn:
+    name: Wait for the DEV publisher account
     needs: [recipe-syntax, new-nightly, build-lastdb]
     if: >-
       !cancelled() &&
@@ -327,6 +333,27 @@ jobs:
       needs.new-nightly.result == 'success' &&
       needs.new-nightly.outputs.run_sharing == 'true' &&
       (needs.new-nightly.outputs.build_mode != 'source' || needs.build-lastdb.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Wait until every earlier run has completed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ci/wait_for_turn.py
+
+  sharing:
+    name: ${{ matrix.mode }} in DEV
+    needs: [recipe-syntax, new-nightly, build-lastdb, turn]
+    if: >-
+      !cancelled() &&
+      needs.turn.result == 'success'
     environment: dev-sharing
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ needs.new-nightly.outputs.build_mode == 'source' && 45 || 15 }}
@@ -551,7 +578,7 @@ jobs:
   # This job is that same issue lifecycle for People.
   notify:
     name: Notify on failure
-    needs: [recipe-syntax, new-nightly, build-lastdb, sharing]
+    needs: [recipe-syntax, new-nightly, build-lastdb, turn, sharing]
     if: >-
       always() &&
       !cancelled() &&
@@ -560,6 +587,7 @@ jobs:
       (needs.recipe-syntax.result == 'failure' ||
        needs.new-nightly.result == 'failure' ||
        needs.build-lastdb.result == 'failure' ||
+       needs.turn.result == 'failure' ||
        needs.sharing.result == 'failure' ||
        needs.sharing.result == 'success')
     runs-on: ubuntu-24.04
@@ -576,7 +604,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_FILE: dev-sharing.yml
-          JOB_RESULTS: ${{ needs.recipe-syntax.result }} ${{ needs.new-nightly.result }} ${{ needs.build-lastdb.result }} ${{ needs.sharing.result }}
+          JOB_RESULTS: ${{ needs.recipe-syntax.result }} ${{ needs.new-nightly.result }} ${{ needs.build-lastdb.result }} ${{ needs.turn.result }} ${{ needs.sharing.result }}
           SHARING_RESULT: ${{ needs.sharing.result }}
           NIGHTLY_TAG: ${{ needs.new-nightly.outputs.tag }}
         run: python3 ci/notify_scheduled_failure.py

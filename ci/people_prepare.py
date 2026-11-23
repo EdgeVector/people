@@ -32,7 +32,7 @@ def prepare():
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
     require(os.environ.get("GITHUB_ACTIONS") == "true"
-            and os.environ.get("GITHUB_REF") == "refs/heads/kanban/org-preset-leases", "people_prepare_accepted_ci_only")
+            and os.environ.get("GITHUB_REF") == "refs/heads/main", "people_prepare_accepted_ci_only")
     programs = Programs(args.bin_dir.resolve(strict=True), args.version, dict(os.environ))
     with tempfile.TemporaryDirectory(prefix="ldb-people-", dir="/tmp") as temporary:
         root = Path(temporary).resolve()

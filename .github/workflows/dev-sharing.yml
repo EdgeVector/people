@@ -112,7 +112,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         env:
           SELECTED_REF: ${{ github.ref }}
-        run: test "$SELECTED_REF" = refs/heads/kanban/org-preset-leases
+        run: test "$SELECTED_REF" = refs/heads/main
       - name: Check the recipe syntax
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
@@ -134,7 +134,7 @@ jobs:
 
   new-nightly:
     name: New nightly
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/kanban/org-preset-leases'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

@@ -227,7 +227,7 @@ def _run_two_node_operation(operation):
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
     require(
-        os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GITHUB_REF") == "refs/heads/kanban/org-preset-leases",
+        os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GITHUB_REF") == "refs/heads/main",
         "share_accepted_ci_only",
     )
     dev_endpoint()

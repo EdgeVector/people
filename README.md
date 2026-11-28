@@ -388,6 +388,16 @@ gh workflow run dev-sharing.yml -R EdgeVector/people --ref main \
   -f mode=all -f lastdb_source_sha=<40-hex> -f relay_url=https://….execute-api….amazonaws.com
 ```
 
+`people-share`'s Photo file + `inline_file` thumbnail step needs LastDB app
+API v48 and shared-database file sync (EdgeVector/lastdb#1956). Until a
+published nightly includes that, pin a #1956 tip, for example:
+
+```
+gh workflow run dev-sharing.yml -R EdgeVector/people --ref main \
+  -f mode=people-share \
+  -f lastdb_source_sha=c53cdf43efd32e7d361f595acd9db0be737be7f8
+```
+
 `people-org` needs a LastDB build with write leases and `changeRecord` (the app SDK 0.20.0).
 
 A red run on `main` from a schedule or a push opens or updates one GitHub

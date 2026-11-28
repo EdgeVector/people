@@ -14,6 +14,12 @@ moved out of `EdgeVector/lastdb` on 2026-11-16.
   `lastdb_source_sha` to the #1805 merge on LastDB main until a post-#1805
   nightly is selected. `selfAccess` is `{role}` only. `relays` is read-only;
   nodes also get `LASTDB_RELAY_URL`. Public `any` cannot be revoked.
+  `people-share` writes a `social/Photo` with a full `file` and a ≤64 KiB
+  `inline_file` thumbnail after accept; that step needs LastDB shared file
+  sync and app API v48 (EdgeVector/lastdb#1956). Until a nightly includes
+  that, dispatch with `lastdb_source_sha` set to a #1956 tip commit (for
+  example `c53cdf43efd32e7d361f595acd9db0be737be7f8`). Cloud legs run only
+  on `main`.
 - `lastdb-app.json` is the app manifest and the source of People's private
   schema definitions. Each schema object uses a local name such as `Person`.
   The installer stores that name as `people/<Name>` from the manifest

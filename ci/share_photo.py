@@ -132,17 +132,29 @@ def read_photo_with_files(node, database, key, file_dir):
 
 
 def prove_shared_photo(publisher, recipient, database, root):
-    """Write a Photo on the publisher; assert the recipient gets identical bytes."""
+    """Write a Photo on the publisher; assert the recipient gets identical values.
+
+    Full-file bytes are compared after `file:true` + `file_dir` placement.
+    `inline_file` on `/v1/read` is the marker only (`name`, `media_type`,
+    `size`); LastDB stores the ≤64 KiB payload inside the record body (not a
+    relay blob), so the marker is the public identity the app API exposes.
+    """
     written = write_shared_photo(publisher, database, root)
     key = written["key"]
+    # Publisher sees the dual attachment before the recipient catches up.
+    pub = Path(root) / "publisher-photo-files"
+    pub.mkdir(mode=0o700)
+    published = read_photo_with_files(publisher, database, key, pub)
+    require(bytes_from_marker(published.get("file"), written["full_bytes"]),
+            "people_photo_publisher_full")
+    assert_marker(published.get("inline_file"), name=THUMB_NAME, media=MEDIA,
+                  size=len(written["thumb_bytes"]), label="publisher_inline")
     wait_for_photo(recipient, database, key)
     rows = read_records(recipient, database, SCHEMA, [key])
     require(len(rows) == 1 and rows[0]["fields"].get("file_size_bytes") == len(written["full_bytes"]),
             "people_photo_fields")
-    inline = rows[0].get("inline_file")
-    if inline is not None:
-        assert_marker(inline, name=THUMB_NAME, media=MEDIA,
-                      size=len(written["thumb_bytes"]), label="inline_meta")
+    assert_marker(rows[0].get("inline_file"), name=THUMB_NAME, media=MEDIA,
+                  size=len(written["thumb_bytes"]), label="inline_meta")
     folder = Path(root) / "recipient-photo-files"
     folder.mkdir(mode=0o700)
     record = read_photo_with_files(recipient, database, key, folder)
@@ -151,14 +163,17 @@ def prove_shared_photo(publisher, recipient, database, root):
                   size=len(written["full_bytes"]), label="file")
     require(bytes_from_marker(file_marker, written["full_bytes"]), "people_photo_full_bytes")
     inline_read = record.get("inline_file")
-    require(inline_read is not None, "people_photo_inline_absent")
     assert_marker(inline_read, name=THUMB_NAME, media=MEDIA,
                   size=len(written["thumb_bytes"]), label="inline")
-    if not bytes_from_marker(inline_read, written["thumb_bytes"]):
-        # Marker fields already matched; path placement for inline is optional.
+    if bytes_from_marker(inline_read, written["thumb_bytes"]):
+        inline_note = "inline bytes placed"
+    else:
+        # Expected on API v48: marker only. Size already matched above.
         require(marker_size(inline_read) == len(written["thumb_bytes"]),
-                "people_photo_inline_size_only")
-    message = ("A shared social/Photo with a full file and an inline thumbnail reached "
-               "the recipient byte-identical on the owner socket (file:true + file_dir).")
+                "people_photo_inline_size")
+        inline_note = "inline marker name/media/size"
+    message = ("A shared social/Photo reached the recipient with byte-identical "
+               "fields and full file (file:true + file_dir), and matching "
+               f"inline_file thumbnail ({inline_note}).")
     print(message, flush=True)
     summary(message)

@@ -218,6 +218,22 @@ def summary(message):
     summary_line(message, echo=False)
 
 
+def accepted_ci():
+    """True for main Actions, or a source-pin workflow_dispatch (any ref).
+
+    pull_request events stay refused. A pinned LastDB SHA on workflow_dispatch
+    is how a PR branch proves DEV sharing before merge.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return False
+    if os.environ.get("GITHUB_REF") == "refs/heads/main":
+        return True
+    if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
+        return False
+    sha = (os.environ.get("LASTDB_SOURCE_COMMIT") or "").strip().lower()
+    return bool(re.fullmatch(r"[0-9a-f]{40}", sha))
+
+
 def _run_two_node_operation(operation):
     from node import OwnedNode, Programs
 
@@ -226,10 +242,7 @@ def _run_two_node_operation(operation):
     parser.add_argument("--bin-dir", type=Path, required=True)
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
-    require(
-        os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("GITHUB_REF") == "refs/heads/main",
-        "share_accepted_ci_only",
-    )
+    require(accepted_ci(), "share_accepted_ci_only")
     dev_endpoint()
     programs = Programs(args.bin_dir.resolve(strict=True), args.version, dict(os.environ))
     with tempfile.TemporaryDirectory(prefix="ldb-share-", dir="/tmp") as temporary:

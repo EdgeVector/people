@@ -265,6 +265,8 @@ def read_records(node, database, schema, keys):
             require(isinstance(fields, dict) and isinstance(revision, str) and revision, "record_read_row")
             row = {"key": record.get("key"), "revision": revision, "fields": fields,
                    "file": record.get("file")}
+            if "inline_file" in record:
+                row["inline_file"] = record.get("inline_file")
             # created_by and updated_by sit beside the record. The node omits a missing one.
             for name in ("created_by", "updated_by"):
                 value = record.get(name)
@@ -278,9 +280,10 @@ def read_records(node, database, schema, keys):
 def write_owned(node, database, *updates):
     """Write records in a database this node owns.
 
-    POST /v1/write takes op, key, record, and revision. It has no definition
-    id, source file name, or metadata. A received database is not this route.
-    A member proposal is the databases action submit. This helper is the owner write.
+    POST /v1/write takes op, key, record, and revision. Optional `file` and
+    `inline_file` path objects ride on the mutation (API v48+). A received
+    database is not this route. A member proposal is the databases action
+    submit. This helper is the owner write.
     """
     mutations = [owned_item(database, update) for update in updates]
     reply = node.call("/v1/write", {"mutations": mutations})
@@ -298,6 +301,9 @@ def owned_item(database, update):
     if op != "delete":
         item["record"] = update["record"]
         item["alternates"] = update.get("alternates") or {}
+        for slot in ("file", "inline_file"):
+            if slot in update:
+                item[slot] = update[slot]
     if op != "create":
         item["revision"] = update["expected"]["revision"]
     return item

@@ -388,6 +388,20 @@ gh workflow run dev-sharing.yml -R EdgeVector/people --ref main \
   -f mode=all -f lastdb_source_sha=<40-hex> -f relay_url=https://….execute-api….amazonaws.com
 ```
 
+`people-share`'s Photo file + `inline_file` thumbnail step needs LastDB app
+API v48 and shared-database file sync (EdgeVector/lastdb#1956, squash
+`b6e7233138b8b5c7afa5c719ed409f259969de92` on LastDB main). Until a
+published nightly includes that, pin that SHA. Dispatch on `main`, or on a
+PR branch that contains the Photo recipe (non-main dispatch requires the
+pin):
+
+```
+gh workflow run dev-sharing.yml -R EdgeVector/people \
+  --ref cursor/shared-photo-file-inline-proof-7075 \
+  -f mode=all \
+  -f lastdb_source_sha=b6e7233138b8b5c7afa5c719ed409f259969de92
+```
+
 `people-org` needs a LastDB build with write leases and `changeRecord` (the app SDK 0.20.0).
 
 A red run on `main` from a schedule or a push opens or updates one GitHub
@@ -407,7 +421,7 @@ the app socket, with `people` registered:
 
 | Mode | What it proves |
 | --- | --- |
-| `people-share` | Save a contact, set up `shared-albums`, grant, invite, accept, read, revoke and restore on a whole-database share, with two scoped content clients |
+| `people-share` | Save a contact, set up `shared-albums`, grant, invite, accept, read, revoke and restore on a whole-database share, with two scoped content clients; after accept, a `social/Photo` with a full `file` and an `inline_file` thumbnail reaches the recipient byte-identical (needs LastDB shared file sync / API v48+) |
 | `people-circles` | Circles grant submit from the chain role, Comment proposals, app sharing requests, grants changed outside People, direct grant, revoke and restore |
 | `people-prepare` | The manifest and schemas produce a valid unsigned registry declaration for this commit on a fresh node |
 | `people-link` | Deliver via `grant#any` plus a People consent-code hand-off; LastDB refuses revoke of `any` |

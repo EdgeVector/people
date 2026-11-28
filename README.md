@@ -407,7 +407,7 @@ the app socket, with `people` registered:
 
 | Mode | What it proves |
 | --- | --- |
-| `people-share` | Save a contact, set up `shared-albums`, grant, invite, accept, read, revoke and restore on a whole-database share, with two scoped content clients |
+| `people-share` | Save a contact, set up `shared-albums`, grant, invite, accept, read, revoke and restore on a whole-database share, with two scoped content clients; after accept, a `social/Photo` with a full `file` and an `inline_file` thumbnail reaches the recipient byte-identical (needs LastDB shared file sync / API v48+) |
 | `people-circles` | Circles grant submit from the chain role, Comment proposals, app sharing requests, grants changed outside People, direct grant, revoke and restore |
 | `people-prepare` | The manifest and schemas produce a valid unsigned registry declaration for this commit on a fresh node |
 | `people-link` | Deliver via `grant#any` plus a People consent-code hand-off; LastDB refuses revoke of `any` |

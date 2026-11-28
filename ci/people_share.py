@@ -10,6 +10,7 @@ from people_app import (SETUP, expect_setup_offline, install, observe_access,
                         open_content_apps, pick, read_album, read_records, report_content_flow, sdk,
                         people, write_owned)
 from share_node import connect, ensure_relay, hex32_id, refuse_proposal, write_member
+from share_photo import prove_shared_photo
 from support import OperationError, require, retry, run_operation, summary
 
 
@@ -193,7 +194,8 @@ def transfer(programs, root, publisher, recipient):
     person = people(publisher, "person", "add", "Ana", "--node-key", reader_key, "--contact", str(contact))
     require(person == {"name": "Ana", "nodeKey": reader_key}
             and person in people(publisher, "person", "list"), "people_app_saved_contact")
-    share_albums(publisher, recipient, name, database, reader_key, publisher_key, definitions[SCHEMA])
+    share_albums(publisher, recipient, root, name, database, reader_key, publisher_key,
+                 definitions[SCHEMA])
     check_role_and_overview(programs, root, publisher, database, name, contact, reader_key)
 
 
@@ -256,7 +258,7 @@ def revoked_album(definition):
                        "cover_photo_id": "none", "created_at": "2026-11-13T00:00:00Z"}}
 
 
-def share_albums(publisher, recipient, name, database, reader_key, publisher_key, definition):
+def share_albums(publisher, recipient, root, name, database, reader_key, publisher_key, definition):
     try:
         grant_reader(publisher, database, "Ana", reader_key)
         receipt = sdk(publisher, "invite", database=name, recipient={"name": "Ana", "nodeKey": reader_key})
@@ -284,6 +286,8 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
         write_album(publisher, database, 1)
         wait_for_album(recipient, database, 1)
         require(read_album(recipient, selections, database, "album-1", ALBUMS[1]), "people_apps_second_album")
+        # Shared file sync (LastDB API v48+): Photo full file + inline thumbnail.
+        prove_shared_photo(publisher, recipient, database, root)
         revoked_hash = sdk(publisher, "revoke", database=name, nodeKey=reader_key)
         require(isinstance(revoked_hash, str) and len(revoked_hash) == 64, "people_sdk_revoke")
         expect_roster(publisher, database, {"nodeKey": reader_key, "role": "revoked", "state": "revoked"})
@@ -315,7 +319,8 @@ def share_albums(publisher, recipient, name, database, reader_key, publisher_key
             summary("Final signed revoke acknowledged.")
     message = ("People created a whole-database share and minted a consent code after a signed "
                "reader grant. The recipient accepted the code, replayed the chain, kept the binding "
-               "across restart, read later albums, had a direct write and a proposal refused after revoke, and "
+               "across restart, read later albums, received a social/Photo with a full file and "
+               "inline thumbnail byte-identical, had a direct write and a proposal refused after revoke, and "
                "caught up after restore.")
     print(message, flush=True)
     summary(message)

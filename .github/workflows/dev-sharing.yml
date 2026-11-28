@@ -16,10 +16,11 @@ name: DEV sharing
 # defaults to environments.dev.exemem_api from the LastDB source under test
 # (same origin #927 prove-dev-relay uses).
 #
-# Cloud steps run only on main. A pull request gets the syntax job and never
-# receives cloud credentials. The sharing job checks out the event commit.
-# It does not check out another ref: that would run branch code in the
-# privileged main job.
+# Cloud steps run on main (push, schedule, and dispatch), and on a
+# workflow_dispatch that sets `lastdb_source_sha` (so a PR branch can prove
+# against a pinned LastDB commit before merge). A pull_request event gets
+# the syntax job only and never starts sharing. The sharing job checks out
+# the event commit (`github.sha` for that ref).
 #
 # EdgeVector/lastdb `ci-required` dispatches this workflow on main (via
 # secrets.GH_PAT) with `lastdb_source_sha` set to the LastDB commit under
@@ -108,11 +109,21 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Require main for a manual cloud run
+      - name: Require main, or a LastDB source pin, for a manual cloud run
         if: github.event_name == 'workflow_dispatch'
         env:
           SELECTED_REF: ${{ github.ref }}
-        run: test "$SELECTED_REF" = refs/heads/main
+          LASTDB_SOURCE_SHA: ${{ inputs.lastdb_source_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$SELECTED_REF" = refs/heads/main ]; then
+            exit 0
+          fi
+          if [[ "${LASTDB_SOURCE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            exit 0
+          fi
+          echo "Non-main workflow_dispatch requires lastdb_source_sha (40 hex)" >&2
+          exit 2
       - name: Check the recipe syntax
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
@@ -134,7 +145,12 @@ jobs:
 
   new-nightly:
     name: New nightly
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    # pull_request: syntax only. main: all non-PR events. Other refs: only a
+    # workflow_dispatch that pins lastdb_source_sha (pre-merge DEV proof).
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' ||
+       (github.event_name == 'workflow_dispatch' && inputs.lastdb_source_sha != ''))
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

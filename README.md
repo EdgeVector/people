@@ -389,13 +389,17 @@ gh workflow run dev-sharing.yml -R EdgeVector/people --ref main \
 ```
 
 `people-share`'s Photo file + `inline_file` thumbnail step needs LastDB app
-API v48 and shared-database file sync (EdgeVector/lastdb#1956). Until a
-published nightly includes that, pin a #1956 tip, for example:
+API v48 and shared-database file sync (EdgeVector/lastdb#1956, squash
+`b6e7233138b8b5c7afa5c719ed409f259969de92` on LastDB main). Until a
+published nightly includes that, pin that SHA. Dispatch on `main`, or on a
+PR branch that contains the Photo recipe (non-main dispatch requires the
+pin):
 
 ```
-gh workflow run dev-sharing.yml -R EdgeVector/people --ref main \
-  -f mode=people-share \
-  -f lastdb_source_sha=c53cdf43efd32e7d361f595acd9db0be737be7f8
+gh workflow run dev-sharing.yml -R EdgeVector/people \
+  --ref cursor/shared-photo-file-inline-proof-7075 \
+  -f mode=all \
+  -f lastdb_source_sha=b6e7233138b8b5c7afa5c719ed409f259969de92
 ```
 
 `people-org` needs a LastDB build with write leases and `changeRecord` (the app SDK 0.20.0).

@@ -94,7 +94,7 @@ def marker_size(marker):
     return None
 
 
-def assert_marker(marker, *, name, media, size, label):
+def assert_marker(marker, *, name, media, size, label, sha256=None):
     require(isinstance(marker, dict), f"people_photo_{label}_marker")
     if marker.get("name") is not None:
         require(marker.get("name") == name, f"people_photo_{label}_name")
@@ -102,6 +102,9 @@ def assert_marker(marker, *, name, media, size, label):
         require(marker.get("media_type") == media, f"people_photo_{label}_media")
     found = marker_size(marker)
     require(found == size, f"people_photo_{label}_size")
+    if sha256 is not None:
+        got = marker.get("sha256")
+        require(isinstance(got, str) and got == sha256, f"people_photo_{label}_sha256")
 
 
 def bytes_from_marker(marker, expected):
@@ -135,9 +138,9 @@ def prove_shared_photo(publisher, recipient, database, root):
     """Write a Photo on the publisher; assert the recipient gets identical values.
 
     Full-file bytes are compared after `file:true` + `file_dir` placement.
-    `inline_file` on `/v1/read` is the marker only (`name`, `media_type`,
-    `size`); LastDB stores the ≤64 KiB payload inside the record body (not a
-    relay blob), so the marker is the public identity the app API exposes.
+    `inline_file` on `/v1/read` is the marker (`name`, `media_type`, `size`,
+    `sha256`); LastDB stores the ≤64 KiB payload inside the record body (not a
+    relay blob). The sha256 is the content comparison for the thumbnail.
     """
     written = write_shared_photo(publisher, database, root)
     key = written["key"]
@@ -147,14 +150,17 @@ def prove_shared_photo(publisher, recipient, database, root):
     published = read_photo_with_files(publisher, database, key, pub)
     require(bytes_from_marker(published.get("file"), written["full_bytes"]),
             "people_photo_publisher_full")
+    thumb_sha = hashlib.sha256(written["thumb_bytes"]).hexdigest()
     assert_marker(published.get("inline_file"), name=THUMB_NAME, media=MEDIA,
-                  size=len(written["thumb_bytes"]), label="publisher_inline")
+                  size=len(written["thumb_bytes"]), label="publisher_inline",
+                  sha256=thumb_sha)
     wait_for_photo(recipient, database, key)
     rows = read_records(recipient, database, SCHEMA, [key])
     require(len(rows) == 1 and rows[0]["fields"].get("file_size_bytes") == len(written["full_bytes"]),
             "people_photo_fields")
     assert_marker(rows[0].get("inline_file"), name=THUMB_NAME, media=MEDIA,
-                  size=len(written["thumb_bytes"]), label="inline_meta")
+                  size=len(written["thumb_bytes"]), label="inline_meta",
+                  sha256=thumb_sha)
     folder = Path(root) / "recipient-photo-files"
     folder.mkdir(mode=0o700)
     record = read_photo_with_files(recipient, database, key, folder)
@@ -163,15 +169,15 @@ def prove_shared_photo(publisher, recipient, database, root):
                   size=len(written["full_bytes"]), label="file")
     require(bytes_from_marker(file_marker, written["full_bytes"]), "people_photo_full_bytes")
     inline_read = record.get("inline_file")
+    thumb_sha = hashlib.sha256(written["thumb_bytes"]).hexdigest()
     assert_marker(inline_read, name=THUMB_NAME, media=MEDIA,
-                  size=len(written["thumb_bytes"]), label="inline")
+                  size=len(written["thumb_bytes"]), label="inline",
+                  sha256=thumb_sha)
     if bytes_from_marker(inline_read, written["thumb_bytes"]):
         inline_note = "inline bytes placed"
     else:
-        # Expected on API v48: marker only. Size already matched above.
-        require(marker_size(inline_read) == len(written["thumb_bytes"]),
-                "people_photo_inline_size")
-        inline_note = "inline marker name/media/size"
+        # API v48 exposes sha256 on inline_file; that is the content check.
+        inline_note = "inline marker sha256"
     message = ("A shared social/Photo reached the recipient with byte-identical "
                "fields and full file (file:true + file_dir), and matching "
                f"inline_file thumbnail ({inline_note}).")

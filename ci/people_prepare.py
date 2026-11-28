@@ -16,7 +16,7 @@ import tempfile
 
 from node import OwnedNode, Programs
 from people_app import ROOT
-from support import OperationError, failure, require, running, summary
+from support import OperationError, accepted_ci, failure, require, running, summary
 
 sys.path.insert(0, str(ROOT / "src"))
 from app import PeopleApp  # noqa: E402
@@ -31,8 +31,7 @@ def prepare():
     parser.add_argument("--bin-dir", type=Path, required=True)
     parser.add_argument("--version", required=True)
     args = parser.parse_args()
-    require(os.environ.get("GITHUB_ACTIONS") == "true"
-            and os.environ.get("GITHUB_REF") == "refs/heads/main", "people_prepare_accepted_ci_only")
+    require(accepted_ci(), "people_prepare_accepted_ci_only")
     programs = Programs(args.bin_dir.resolve(strict=True), args.version, dict(os.environ))
     with tempfile.TemporaryDirectory(prefix="ldb-people-", dir="/tmp") as temporary:
         root = Path(temporary).resolve()
